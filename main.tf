@@ -1,5 +1,6 @@
 ############################################
 # cg-adv — Phase 1: Base Network & Security (SSM-only, no public ingress)
+# + Minimal GWLB scaffold (single AZ)
 ############################################
 
 terraform {
@@ -69,9 +70,7 @@ resource "aws_vpc" "this" {
   enable_dns_support   = true
   enable_dns_hostnames = true
 
-  tags = {
-    Name = "cg-adv-vpc"
-  }
+  tags = { Name = "cg-adv-vpc" }
 }
 
 resource "aws_subnet" "mgmt_az1" {
@@ -79,7 +78,6 @@ resource "aws_subnet" "mgmt_az1" {
   cidr_block              = var.mgmt_cidr
   availability_zone       = var.az_1
   map_public_ip_on_launch = false
-
   tags = { Name = "mgmt-az1" }
 }
 
@@ -87,7 +85,6 @@ resource "aws_subnet" "trust_az1" {
   vpc_id            = aws_vpc.this.id
   cidr_block        = var.trust_cidr
   availability_zone = var.az_1
-
   tags = { Name = "trust-az1" }
 }
 
@@ -95,7 +92,6 @@ resource "aws_subnet" "untrust_az1" {
   vpc_id            = aws_vpc.this.id
   cidr_block        = var.untrust_cidr
   availability_zone = var.az_1
-
   tags = { Name = "untrust-az1" }
 }
 
@@ -134,11 +130,12 @@ resource "aws_route_table_association" "rta_untrust" {
 }
 
 ############################################
-# Security Groups (Fixed Name Attribute)
+# Security Groups (names fixed; must not start with 'sg-')
 ############################################
 
+# SSM-only mgmt SG (no inbound)
 resource "aws_security_group" "mgmt_sg" {
-  name        = "adv-mgmt"             # ✅ FIXED (cannot start with sg-)
+  name        = "adv-mgmt"
   description = "No inbound (SSM-only)"
   vpc_id      = aws_vpc.this.id
 
@@ -149,11 +146,12 @@ resource "aws_security_group" "mgmt_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = { Name = "sg-mgmt" }          # ✅ Tag is fine
+  tags = { Name = "sg-mgmt" } # tag can include 'sg-'
 }
 
+# VPC endpoints SG (allow 443 from VPC)
 resource "aws_security_group" "endpoints_sg" {
-  name        = "adv-vpce"             # ✅ FIXED
+  name        = "adv-vpce"
   description = "Allow HTTPS inside VPC to Interface Endpoints"
   vpc_id      = aws_vpc.this.id
 
@@ -175,8 +173,9 @@ resource "aws_security_group" "endpoints_sg" {
   tags = { Name = "sg-vpce" }
 }
 
+# Default-deny for trust/untrust (no inbound)
 resource "aws_security_group" "default_deny" {
-  name        = "adv-default-deny"     # ✅ FIXED
+  name        = "adv-default-deny"
   description = "Deny inbound, allow outbound"
   vpc_id      = aws_vpc.this.id
 
@@ -191,7 +190,7 @@ resource "aws_security_group" "default_deny" {
 }
 
 ############################################
-# SSM VPC Endpoints
+# VPC Interface Endpoints (SSM)
 ############################################
 
 data "aws_region" "current" {}
@@ -201,6 +200,11 @@ locals {
     "com.amazonaws.${data.aws_region.current.name}.ssm",
     "com.amazonaws.${data.aws_region.current.name}.ssmmessages",
     "com.amazonaws.${data.aws_region.current.name}.ec2messages"
+  ]
+
+  # Single-AZ starter for GWLB (extend to multi-AZ later)
+  gwlb_subnet_ids = [
+    aws_subnet.trust_az1.id
   ]
 }
 
@@ -260,11 +264,11 @@ resource "aws_iam_instance_profile" "bastion_profile" {
 }
 
 resource "aws_instance" "ssm_bastion" {
-  ami                    = data.aws_ami.al2023.id
-  instance_type          = var.bastion_instance_type
-  subnet_id              = aws_subnet.mgmt_az1.id
-  iam_instance_profile   = aws_iam_instance_profile.bastion_profile.name
-  vpc_security_group_ids = [aws_security_group.mgmt_sg.id]
+  ami                         = data.aws_ami.al2023.id
+  instance_type               = var.bastion_instance_type
+  subnet_id                   = aws_subnet.mgmt_az1.id
+  iam_instance_profile        = aws_iam_instance_profile.bastion_profile.name
+  vpc_security_group_ids      = [aws_security_group.mgmt_sg.id]
   associate_public_ip_address = false
 
   metadata_options {
@@ -327,9 +331,59 @@ resource "aws_flow_log" "vpc" {
 }
 
 ############################################
+# Phase 3 Scaffold — Gateway Load Balancer (single AZ)
+# (No targets registered yet; attach firewall IPs later)
+############################################
+
+resource "aws_lb" "gwlb" {
+  name               = "cg-adv-gwlb"
+  load_balancer_type = "gateway"
+
+  dynamic "subnet_mapping" {
+    for_each = toset(local.gwlb_subnet_ids)
+    content {
+      subnet_id = subnet_mapping.value
+    }
+  }
+
+  tags = { Name = "cg-adv-gwlb" }
+}
+
+resource "aws_lb_target_group" "gwlb_tg" {
+  name        = "cg-adv-gwlb-tg"
+  port        = 6081
+  protocol    = "GENEVE"
+  vpc_id      = aws_vpc.this.id
+  target_type = "ip"
+
+  health_check {
+    protocol = "TCP"
+    port     = "80"
+  }
+
+  tags = { Name = "cg-adv-gwlb-tg" }
+}
+
+resource "aws_lb_listener" "gwlb_listener" {
+  load_balancer_arn = aws_lb.gwlb.arn
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.gwlb_tg.arn
+  }
+}
+
+############################################
 # Outputs
 ############################################
 
 output "ssm_bastion_instance_id" {
   value = aws_instance.ssm_bastion.id
+}
+
+output "gwlb_arn" {
+  value = aws_lb.gwlb.arn
+}
+
+output "gwlb_target_group_arn" {
+  value = aws_lb_target_group.gwlb_tg.arn
 }
