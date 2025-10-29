@@ -1,23 +1,9 @@
 ############################################
 # cg-adv — Phase 1: Base Network & Security (SSM-only, no public ingress)
-# - VPC + mgmt/trust/untrust subnets (1 AZ for Phase 1)
-# - Separate route tables
-# - SSM bastion (no public IP)
-# - VPC Interface Endpoints: ssm, ssmmessages, ec2messages
-# - VPC Flow Logs -> CloudWatch
-# - Security: NO inbound rules (SSM-only)
 ############################################
 
 terraform {
   required_version = ">= 1.6.0, < 2.0.0"
-
-  # Uncomment if using Terraform Cloud
-  # cloud {
-  #   organization = "cloudgenius_global"
-  #   workspaces {
-  #     name = "aws-workpackage"
-  #   }
-  # }
 
   required_providers {
     aws = {
@@ -43,45 +29,41 @@ provider "aws" {
 ############################################
 # Variables
 ############################################
+
 variable "vpc_cidr" {
-  description = "Primary VPC CIDR"
-  type        = string
-  default     = "10.20.0.0/16"
+  type    = string
+  default = "10.20.0.0/16"
 }
 
 variable "az_1" {
-  description = "Primary AZ"
-  type        = string
-  default     = "us-west-2a"
+  type    = string
+  default = "us-west-2a"
 }
 
 variable "mgmt_cidr" {
-  description = "CIDR for mgmt subnet"
-  type        = string
-  default     = "10.20.1.0/24"
+  type    = string
+  default = "10.20.1.0/24"
 }
 
 variable "trust_cidr" {
-  description = "CIDR for trust subnet"
-  type        = string
-  default     = "10.20.11.0/24"
+  type    = string
+  default = "10.20.11.0/24"
 }
 
 variable "untrust_cidr" {
-  description = "CIDR for untrust subnet"
-  type        = string
-  default     = "10.20.21.0/24"
+  type    = string
+  default = "10.20.21.0/24"
 }
 
 variable "bastion_instance_type" {
-  description = "Instance type for SSM bastion"
-  type        = string
-  default     = "t3.micro"
+  type    = string
+  default = "t3.micro"
 }
 
 ############################################
 # VPC + Subnets
 ############################################
+
 resource "aws_vpc" "this" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
@@ -98,9 +80,7 @@ resource "aws_subnet" "mgmt_az1" {
   availability_zone       = var.az_1
   map_public_ip_on_launch = false
 
-  tags = {
-    Name = "mgmt-az1"
-  }
+  tags = { Name = "mgmt-az1" }
 }
 
 resource "aws_subnet" "trust_az1" {
@@ -108,9 +88,7 @@ resource "aws_subnet" "trust_az1" {
   cidr_block        = var.trust_cidr
   availability_zone = var.az_1
 
-  tags = {
-    Name = "trust-az1"
-  }
+  tags = { Name = "trust-az1" }
 }
 
 resource "aws_subnet" "untrust_az1" {
@@ -118,81 +96,65 @@ resource "aws_subnet" "untrust_az1" {
   cidr_block        = var.untrust_cidr
   availability_zone = var.az_1
 
-  tags = {
-    Name = "untrust-az1"
-  }
+  tags = { Name = "untrust-az1" }
 }
 
 ############################################
-# Route Tables (separated; no IGW/NAT in Phase 1)
+# Route Tables
 ############################################
+
 resource "aws_route_table" "rtb_mgmt" {
   vpc_id = aws_vpc.this.id
-
-  tags = {
-    Name = "rtb-mgmt-az1"
-  }
+  tags   = { Name = "rtb-mgmt-az1" }
 }
 
 resource "aws_route_table_association" "rta_mgmt" {
-  route_table_id = aws_route_table.rtb_mgmt.id
   subnet_id      = aws_subnet.mgmt_az1.id
+  route_table_id = aws_route_table.rtb_mgmt.id
 }
 
 resource "aws_route_table" "rtb_trust" {
   vpc_id = aws_vpc.this.id
-
-  tags = {
-    Name = "rtb-trust-az1"
-  }
+  tags   = { Name = "rtb-trust-az1" }
 }
 
 resource "aws_route_table_association" "rta_trust" {
-  route_table_id = aws_route_table.rtb_trust.id
   subnet_id      = aws_subnet.trust_az1.id
+  route_table_id = aws_route_table.rtb_trust.id
 }
 
 resource "aws_route_table" "rtb_untrust" {
   vpc_id = aws_vpc.this.id
-
-  tags = {
-    Name = "rtb-untrust-az1"
-  }
+  tags   = { Name = "rtb-untrust-az1" }
 }
 
 resource "aws_route_table_association" "rta_untrust" {
-  route_table_id = aws_route_table.rtb_untrust.id
   subnet_id      = aws_subnet.untrust_az1.id
+  route_table_id = aws_route_table.rtb_untrust.id
 }
 
 ############################################
-# Security Groups
+# Security Groups (Fixed Name Attribute)
 ############################################
 
-# Management SG (no inbound; SSM-only)
 resource "aws_security_group" "mgmt_sg" {
-  name        = "sg-mgmt"
-  description = "No inbound (SSM-only). All egress."
+  name        = "adv-mgmt"             # ✅ FIXED (cannot start with sg-)
+  description = "No inbound (SSM-only)"
   vpc_id      = aws_vpc.this.id
 
-  # No ingress blocks = default deny
   egress {
-    description = "All egress"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "sg-mgmt"
-  }
+  tags = { Name = "sg-mgmt" }          # ✅ Tag is fine
 }
 
-# Interface Endpoints SG (allow 443 from inside VPC)
 resource "aws_security_group" "endpoints_sg" {
-  name        = "sg-vpce"
-  description = "Allow HTTPS from VPC to interface endpoints"
+  name        = "adv-vpce"             # ✅ FIXED
+  description = "Allow HTTPS inside VPC to Interface Endpoints"
   vpc_id      = aws_vpc.this.id
 
   ingress {
@@ -204,40 +166,34 @@ resource "aws_security_group" "endpoints_sg" {
   }
 
   egress {
-    description = "All egress"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "sg-vpce"
-  }
+  tags = { Name = "sg-vpce" }
 }
 
-# Default-deny SG for trust/untrust (no ingress)
 resource "aws_security_group" "default_deny" {
-  name        = "sg-default-deny"
-  description = "No inbound; all egress"
+  name        = "adv-default-deny"     # ✅ FIXED
+  description = "Deny inbound, allow outbound"
   vpc_id      = aws_vpc.this.id
 
   egress {
-    description = "All egress"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "sg-default-deny"
-  }
+  tags = { Name = "sg-default-deny" }
 }
 
 ############################################
-# VPC Interface Endpoints for SSM
+# SSM VPC Endpoints
 ############################################
+
 data "aws_region" "current" {}
 
 locals {
@@ -257,15 +213,13 @@ resource "aws_vpc_endpoint" "ssm_ifaces" {
   security_group_ids  = [aws_security_group.endpoints_sg.id]
   subnet_ids          = [aws_subnet.mgmt_az1.id]
 
-  tags = {
-    Name = "vpce-${replace(each.value, ".", "-")}"
-  }
+  tags = { Name = "vpce-${replace(each.value, ".", "-")}" }
 }
 
 ############################################
-# SSM Bastion (no public IP, SSM-only)
+# SSM Bastion (No Public IP)
 ############################################
-# AMI: Amazon Linux 2023 (has SSM agent)
+
 data "aws_ami" "al2023" {
   owners      = ["137112412989"]
   most_recent = true
@@ -276,7 +230,6 @@ data "aws_ami" "al2023" {
   }
 }
 
-# IAM for SSM
 data "aws_iam_policy" "ssm_core" {
   arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
@@ -284,7 +237,6 @@ data "aws_iam_policy" "ssm_core" {
 data "aws_iam_policy_document" "bastion_trust" {
   statement {
     actions = ["sts:AssumeRole"]
-
     principals {
       type        = "Service"
       identifiers = ["ec2.amazonaws.com"]
@@ -308,26 +260,25 @@ resource "aws_iam_instance_profile" "bastion_profile" {
 }
 
 resource "aws_instance" "ssm_bastion" {
-  ami                         = data.aws_ami.al2023.id
-  instance_type               = var.bastion_instance_type
-  subnet_id                   = aws_subnet.mgmt_az1.id
-  iam_instance_profile        = aws_iam_instance_profile.bastion_profile.name
+  ami                    = data.aws_ami.al2023.id
+  instance_type          = var.bastion_instance_type
+  subnet_id              = aws_subnet.mgmt_az1.id
+  iam_instance_profile   = aws_iam_instance_profile.bastion_profile.name
+  vpc_security_group_ids = [aws_security_group.mgmt_sg.id]
   associate_public_ip_address = false
-  vpc_security_group_ids      = [aws_security_group.mgmt_sg.id]
 
   metadata_options {
     http_endpoint = "enabled"
     http_tokens   = "required"
   }
 
-  tags = {
-    Name = "cg-adv-ssm-bastion"
-  }
+  tags = { Name = "cg-adv-ssm-bastion" }
 }
 
 ############################################
-# VPC Flow Logs -> CloudWatch
+# VPC Flow Logs → CloudWatch
 ############################################
+
 resource "aws_cloudwatch_log_group" "vpc_flow" {
   name              = "/aws/vpc/flow-logs/${aws_vpc.this.id}"
   retention_in_days = 14
@@ -336,7 +287,6 @@ resource "aws_cloudwatch_log_group" "vpc_flow" {
 data "aws_iam_policy_document" "flowlog_assume" {
   statement {
     actions = ["sts:AssumeRole"]
-
     principals {
       type        = "Service"
       identifiers = ["vpc-flow-logs.amazonaws.com"]
@@ -354,14 +304,9 @@ data "aws_iam_policy_document" "flowlog_cwl_policy" {
     actions = [
       "logs:CreateLogGroup",
       "logs:CreateLogStream",
-      "logs:DescribeLogGroups",
-      "logs:DescribeLogStreams",
       "logs:PutLogEvents"
     ]
-    resources = [
-      aws_cloudwatch_log_group.vpc_flow.arn,
-      "${aws_cloudwatch_log_group.vpc_flow.arn}:*"
-    ]
+    resources = ["${aws_cloudwatch_log_group.vpc_flow.arn}:*"]
   }
 }
 
@@ -372,40 +317,19 @@ resource "aws_iam_role_policy" "flowlog_inline" {
 }
 
 resource "aws_flow_log" "vpc" {
+  vpc_id               = aws_vpc.this.id
+  traffic_type         = "ALL"
   log_destination      = aws_cloudwatch_log_group.vpc_flow.arn
   log_destination_type = "cloud-watch-logs"
-  traffic_type         = "ALL"
-  vpc_id               = aws_vpc.this.id
   iam_role_arn         = aws_iam_role.flowlog_role.arn
 
-  tags = {
-    Name = "cg-adv-vpc-flow-logs"
-  }
+  tags = { Name = "cg-adv-vpc-flow-logs" }
 }
 
 ############################################
 # Outputs
 ############################################
-output "vpc_id" {
-  value = aws_vpc.this.id
-}
-
-output "subnets" {
-  value = {
-    mgmt_az1   = aws_subnet.mgmt_az1.id
-    trust_az1  = aws_subnet.trust_az1.id
-    untrust_az1= aws_subnet.untrust_az1.id
-  }
-}
 
 output "ssm_bastion_instance_id" {
   value = aws_instance.ssm_bastion.id
-}
-
-output "vpce_ids" {
-  value = { for k, v in aws_vpc_endpoint.ssm_ifaces : k => v.id }
-}
-
-output "how_to_port_forward_https_from_bastion" {
-  value = "aws ssm start-session --target ${aws_instance.ssm_bastion.id} --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters '{\"host\":[\"<FIREWALL_MGMT_IP>\"],\"portNumber\":[\"443\"],\"localPortNumber\":[\"8443\"]}'"
 }
