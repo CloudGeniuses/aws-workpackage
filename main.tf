@@ -1,191 +1,238 @@
+terraform {
+  required_version = ">= 1.5.0"
+
+  cloud {
+    organization = "my-org"
+
+    workspaces {
+      name = "palo-nva-project"
+    }
+  }
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
+}
+
 provider "aws" {
-  region = "us-west-2"
+  region = var.aws_region
 }
 
-# -------------------------------
-# VPC Modules
-# -------------------------------
-module "management_vpc" {
-  source       = "terraform-aws-modules/vpc/aws"
-  version      = "4.0.2"
-  name         = "management-vpc"
-  cidr         = "10.10.0.0/16"
-  azs          = ["us-west-2a", "us-west-2b"]
-  public_subnets  = ["10.10.1.0/24", "10.10.2.0/24"]
-  private_subnets = ["10.10.11.0/24", "10.10.12.0/24"]
-  enable_nat_gateway = true
+# VARIABLES
+variable "aws_region" {
+  description = "AWS Region"
+  type        = string
+  default     = "us-east-1"
 }
 
-module "app_vpc" {
-  source       = "terraform-aws-modules/vpc/aws"
-  version      = "4.0.2"
-  name         = "app-vpc"
-  cidr         = "10.20.0.0/16"
-  azs          = ["us-west-2a", "us-west-2b"]
-  public_subnets  = ["10.20.1.0/24", "10.20.2.0/24"]
-  private_subnets = ["10.20.11.0/24", "10.20.12.0/24"]
-  enable_nat_gateway = true
+variable "management_vpc_cidr" {
+  description = "CIDR block for Management VPC"
+  type        = string
+  default     = "10.10.0.0/16"
 }
 
-module "inspection_vpc" {
-  source       = "terraform-aws-modules/vpc/aws"
-  version      = "4.0.2"
-  name         = "inspection-vpc"
-  cidr         = "10.30.0.0/16"
-  azs          = ["us-west-2a", "us-west-2b"]
-  public_subnets  = ["10.30.1.0/24", "10.30.2.0/24"]
-  private_subnets = ["10.30.11.0/24", "10.30.12.0/24"]
-  enable_nat_gateway = true
+variable "app_vpc_cidr" {
+  description = "CIDR block for App VPC"
+  type        = string
+  default     = "10.20.0.0/16"
 }
 
-# -------------------------------
-# Security Groups
-# -------------------------------
-# Bastion Host SG (SSM only)
-resource "aws_security_group" "bastion_sg" {
-  name        = "bastion_sg"
-  description = "Bastion SG for SSM only"
-  vpc_id      = module.management_vpc.vpc_id
+variable "inspection_vpc_cidr" {
+  description = "CIDR block for Inspection VPC"
+  type        = string
+  default     = "10.30.0.0/16"
+}
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+# VPCS
+resource "aws_vpc" "management" {
+  cidr_block           = var.management_vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags = {
+    Name = "management-vpc"
   }
 }
 
-# Application SG (HTTP/HTTPS from NVA)
-resource "aws_security_group" "app_sg" {
-  name        = "app_sg"
-  description = "App SG for NGINX server"
-  vpc_id      = module.app_vpc.vpc_id
-
-  ingress {
-    description = "HTTP from inspection VPC / NVA"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["10.30.0.0/16"]  # Inspection VPC CIDR
-  }
-
-  ingress {
-    description = "HTTPS from inspection VPC / NVA"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["10.30.0.0/16"]  # Inspection VPC CIDR
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+resource "aws_vpc" "app" {
+  cidr_block           = var.app_vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags = {
+    Name = "app-vpc"
   }
 }
 
-# -------------------------------
-# IAM Role for SSM
-# -------------------------------
-resource "aws_iam_role" "ssm_role" {
-  name = "ssm_role"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = { Service = "ec2.amazonaws.com" }
-      Action = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ssm_attach" {
-  role       = aws_iam_role.ssm_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_instance_profile" "ssm_profile" {
-  name = "ssm_profile"
-  role = aws_iam_role.ssm_role.name
-}
-
-# -------------------------------
-# Bastion Host (Private, SSM-enabled)
-# -------------------------------
-data "aws_ami" "amazon_linux" {
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+resource "aws_vpc" "inspection" {
+  cidr_block           = var.inspection_vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags = {
+    Name = "inspection-vpc"
   }
 }
 
-resource "aws_instance" "bastion" {
-  ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t3.micro"
-  subnet_id              = module.management_vpc.private_subnets[0]
-  security_groups        = [aws_security_group.bastion_sg.id]
-  iam_instance_profile   = aws_iam_instance_profile.ssm_profile.name
-  tags = { Name = "Bastion-SSM" }
+# PUBLIC SUBNETS
+resource "aws_subnet" "management_public" {
+  vpc_id            = aws_vpc.management.id
+  cidr_block        = "10.10.1.0/24"
+  map_public_ip_on_launch = true
+  availability_zone = "${var.aws_region}a"
+  tags = {
+    Name = "management-public"
+  }
 }
 
-# -------------------------------
-# NAT EIPs (no vpc argument)
-# -------------------------------
-resource "aws_eip" "nat_management" {
-  depends_on = [module.management_vpc.internet_gateway_id]
+resource "aws_subnet" "app_public" {
+  vpc_id            = aws_vpc.app.id
+  cidr_block        = "10.20.1.0/24"
+  map_public_ip_on_launch = true
+  availability_zone = "${var.aws_region}a"
+  tags = {
+    Name = "app-public"
+  }
 }
 
-resource "aws_eip" "nat_app" {
-  depends_on = [module.app_vpc.internet_gateway_id]
+resource "aws_subnet" "inspection_public" {
+  vpc_id            = aws_vpc.inspection.id
+  cidr_block        = "10.30.1.0/24"
+  map_public_ip_on_launch = true
+  availability_zone = "${var.aws_region}a"
+  tags = {
+    Name = "inspection-public"
+  }
 }
 
-resource "aws_eip" "nat_inspection" {
-  depends_on = [module.inspection_vpc.internet_gateway_id]
+# PRIVATE SUBNETS
+resource "aws_subnet" "management_private" {
+  vpc_id            = aws_vpc.management.id
+  cidr_block        = "10.10.2.0/24"
+  availability_zone = "${var.aws_region}a"
+  tags = {
+    Name = "management-private"
+  }
 }
 
-# -------------------------------
-# Private Route Tables (ready for manual Palo)
-# -------------------------------
+resource "aws_subnet" "app_private" {
+  vpc_id            = aws_vpc.app.id
+  cidr_block        = "10.20.2.0/24"
+  availability_zone = "${var.aws_region}a"
+  tags = {
+    Name = "app-private"
+  }
+}
+
+resource "aws_subnet" "inspection_private" {
+  vpc_id            = aws_vpc.inspection.id
+  cidr_block        = "10.30.2.0/24"
+  availability_zone = "${var.aws_region}a"
+  tags = {
+    Name = "inspection-private"
+  }
+}
+
+# INTERNET GATEWAYS
+resource "aws_internet_gateway" "management" {
+  vpc_id = aws_vpc.management.id
+  tags = {
+    Name = "management-igw"
+  }
+}
+
+resource "aws_internet_gateway" "app" {
+  vpc_id = aws_vpc.app.id
+  tags = {
+    Name = "app-igw"
+  }
+}
+
+resource "aws_internet_gateway" "inspection" {
+  vpc_id = aws_vpc.inspection.id
+  tags = {
+    Name = "inspection-igw"
+  }
+}
+
+# NAT GATEWAYS
+resource "aws_eip" "management_nat" {
+  tags = { Name = "management-nat-eip" }
+}
+
+resource "aws_nat_gateway" "management" {
+  allocation_id = aws_eip.management_nat.id
+  subnet_id     = aws_subnet.management_public.id
+  tags = { Name = "management-nat" }
+}
+
+resource "aws_eip" "app_nat" {
+  tags = { Name = "app-nat-eip" }
+}
+
+resource "aws_nat_gateway" "app" {
+  allocation_id = aws_eip.app_nat.id
+  subnet_id     = aws_subnet.app_public.id
+  tags = { Name = "app-nat" }
+}
+
+resource "aws_eip" "inspection_nat" {
+  tags = { Name = "inspection-nat-eip" }
+}
+
+resource "aws_nat_gateway" "inspection" {
+  allocation_id = aws_eip.inspection_nat.id
+  subnet_id     = aws_subnet.inspection_public.id
+  tags = { Name = "inspection-nat" }
+}
+
+# ROUTE TABLES
 resource "aws_route_table" "management_private" {
-  vpc_id = module.management_vpc.vpc_id
-}
-
-resource "aws_route" "management_private_to_nva" {
-  route_table_id         = aws_route_table.management_private.id
-  destination_cidr_block = "0.0.0.0/0"
-  # Target: add NVA ENI manually
+  vpc_id = aws_vpc.management.id
+  tags = { Name = "management-private-rt" }
 }
 
 resource "aws_route_table" "app_private" {
-  vpc_id = module.app_vpc.vpc_id
-}
-
-resource "aws_route" "app_private_to_nva" {
-  route_table_id         = aws_route_table.app_private.id
-  destination_cidr_block = "0.0.0.0/0"
-  # Target: add NVA ENI manually
+  vpc_id = aws_vpc.app.id
+  tags = { Name = "app-private-rt" }
 }
 
 resource "aws_route_table" "inspection_private" {
-  vpc_id = module.inspection_vpc.vpc_id
+  vpc_id = aws_vpc.inspection.id
+  tags = { Name = "inspection-private-rt" }
 }
 
-resource "aws_route" "inspection_private_to_nva" {
+# ROUTES TO NAT
+resource "aws_route" "management_private_nat" {
+  route_table_id         = aws_route_table.management_private.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.management.id
+}
+
+resource "aws_route" "app_private_nat" {
+  route_table_id         = aws_route_table.app_private.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.app.id
+}
+
+resource "aws_route" "inspection_private_nat" {
   route_table_id         = aws_route_table.inspection_private.id
   destination_cidr_block = "0.0.0.0/0"
-  # Target: add NVA ENI manually
+  nat_gateway_id         = aws_nat_gateway.inspection.id
 }
 
-# -------------------------------
-# Example EC2 for Application (NGINX)
-# -------------------------------
-resource "aws_instance" "app_server" {
-  ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t3.small"
-  subnet_id              = module.app_vpc.private_subnets[0]
-  security_groups        = [aws_security_group.app_sg.id]
-  tags = { Name = "NGINX-App-Server" }
+# ASSOCIATIONS
+resource "aws_route_table_association" "management_private_assoc" {
+  subnet_id      = aws_subnet.management_private.id
+  route_table_id = aws_route_table.management_private.id
+}
+
+resource "aws_route_table_association" "app_private_assoc" {
+  subnet_id      = aws_subnet.app_private.id
+  route_table_id = aws_route_table.app_private.id
+}
+
+resource "aws_route_table_association" "inspection_private_assoc" {
+  subnet_id      = aws_subnet.inspection_private.id
+  route_table_id = aws_route_table.inspection_private.id
 }
