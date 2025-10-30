@@ -69,6 +69,15 @@ variable "inspection_vpc_cidr" {
 }
 
 ########################################
+# LOCALS
+########################################
+
+locals {
+  # Bastion subnet = management_private (10.10.2.0/24)
+  mgmt_private_cidr = "10.10.2.0/24"
+}
+
+########################################
 # VPCs
 ########################################
 
@@ -486,7 +495,7 @@ resource "aws_iam_instance_profile" "ssm_profile" {
 }
 
 ########################################
-# SECURITY GROUPS
+# SECURITY GROUPs
 ########################################
 
 resource "aws_security_group" "management_sg" {
@@ -535,6 +544,7 @@ resource "aws_security_group" "palo_mgmt_sg" {
   description = "Security group for Palo Alto management interface"
   vpc_id      = aws_vpc.inspection.id
 
+  # Broad intra-Inspection-VPC allowance (your original)
   ingress {
     description = "Allow HTTPS (GUI) from Inspection VPC only"
     from_port   = 443
@@ -562,6 +572,27 @@ resource "aws_security_group" "palo_mgmt_sg" {
   tags = {
     Name = "palo-mgmt-sg"
   }
+}
+
+# Narrow rules to ensure SSM port-forward from bastion subnet works
+resource "aws_security_group_rule" "palo_gui_from_mgmt_private" {
+  type              = "ingress"
+  security_group_id = aws_security_group.palo_mgmt_sg.id
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  cidr_blocks       = [local.mgmt_private_cidr]
+  description       = "Allow HTTPS from management-private (bastion) for SSM port-forward"
+}
+
+resource "aws_security_group_rule" "palo_ssh_from_mgmt_private" {
+  type              = "ingress"
+  security_group_id = aws_security_group.palo_mgmt_sg.id
+  from_port         = 22
+  to_port           = 22
+  protocol          = "tcp"
+  cidr_blocks       = [local.mgmt_private_cidr]
+  description       = "Allow SSH from management-private (bastion) for SSM port-forward"
 }
 
 ########################################
