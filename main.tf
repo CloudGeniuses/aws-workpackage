@@ -169,7 +169,7 @@ resource "aws_subnet" "inspection_private" {
   }
 }
 
-# NEW: Dedicated management subnet for Palo mgmt interface (eth0)
+# Palo mgmt subnet (eth0)
 resource "aws_subnet" "inspection_mgmt" {
   vpc_id                  = aws_vpc.inspection.id
   cidr_block              = "10.30.10.0/24"
@@ -353,7 +353,6 @@ resource "aws_ec2_transit_gateway_route_table" "main" {
   }
 }
 
-# TGW Routes – no tags (tags not supported)
 resource "aws_ec2_transit_gateway_route" "route_to_management" {
   destination_cidr_block         = var.management_vpc_cidr
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.management_attach.id
@@ -451,6 +450,41 @@ resource "aws_security_group" "app_sg" {
   }
 }
 
+# >>> NEW: Palo Alto Management SG (for mgmt eth0 in inspection-mgmt subnet)
+resource "aws_security_group" "palo_mgmt_sg" {
+  name        = "palo-mgmt-sg"
+  description = "Security group for Palo Alto management interface"
+  vpc_id      = aws_vpc.inspection.id
+
+  ingress {
+    description = "Allow HTTPS (GUI) from Inspection VPC only"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.inspection_vpc_cidr]
+  }
+
+  ingress {
+    description = "Allow SSH from Inspection VPC only (optional)"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.inspection_vpc_cidr]
+  }
+
+  egress {
+    description = "Allow all outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "palo-mgmt-sg"
+  }
+}
+
 ########################################
 # INSTANCES (SSM-ENABLED)
 ########################################
@@ -492,7 +526,7 @@ resource "aws_instance" "nginx" {
 ########################################
 
 # Manually deploy Palo Alto in Inspection VPC with three ENIs:
-#  - eth0 (mgmt)      -> subnet: aws_subnet.inspection_mgmt.id
-#  - eth1 (untrust)   -> subnet: aws_subnet.inspection_public.id  (assign EIP)
+#  - eth0 (mgmt)      -> subnet: aws_subnet.inspection_mgmt.id  + SG: aws_security_group.palo_mgmt_sg.id
+#  - eth1 (untrust)   -> subnet: aws_subnet.inspection_public.id (assign EIP)
 #  - eth2 (trust)     -> subnet: aws_subnet.inspection_private.id
-# Make sure TGW routes are steered through the firewall for egress/East-West.
+# Then we will steer TGW routes through the firewall for egress/East-West.
