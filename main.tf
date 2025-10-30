@@ -264,12 +264,84 @@ resource "aws_nat_gateway" "inspection" {
 # ROUTE TABLES
 ########################################
 
+# -------- PUBLIC RTs (IGW egress) --------
+
+resource "aws_route_table" "management_public" {
+  vpc_id = aws_vpc.management.id
+
+  tags = {
+    Name = "management-public-rt"
+  }
+}
+
+resource "aws_route" "management_public_default" {
+  route_table_id         = aws_route_table.management_public.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.management.id
+}
+
+resource "aws_route_table_association" "management_public_assoc" {
+  subnet_id      = aws_subnet.management_public.id
+  route_table_id = aws_route_table.management_public.id
+}
+
+resource "aws_route_table" "app_public" {
+  vpc_id = aws_vpc.app.id
+
+  tags = {
+    Name = "app-public-rt"
+  }
+}
+
+resource "aws_route" "app_public_default" {
+  route_table_id         = aws_route_table.app_public.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.app.id
+}
+
+resource "aws_route_table_association" "app_public_assoc" {
+  subnet_id      = aws_subnet.app_public.id
+  route_table_id = aws_route_table.app_public.id
+}
+
+resource "aws_route_table" "inspection_public" {
+  vpc_id = aws_vpc.inspection.id
+
+  tags = {
+    Name = "inspection-public-rt"
+  }
+}
+
+resource "aws_route" "inspection_public_default" {
+  route_table_id         = aws_route_table.inspection_public.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.inspection.id
+}
+
+resource "aws_route_table_association" "inspection_public_assoc" {
+  subnet_id      = aws_subnet.inspection_public.id
+  route_table_id = aws_route_table.inspection_public.id
+}
+
+# -------- PRIVATE RTs (NAT egress) --------
+
 resource "aws_route_table" "management_private" {
   vpc_id = aws_vpc.management.id
 
   tags = {
     Name = "management-private-rt"
   }
+}
+
+resource "aws_route" "management_private_default" {
+  route_table_id         = aws_route_table.management_private.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.management.id
+}
+
+resource "aws_route_table_association" "management_private_assoc" {
+  subnet_id      = aws_subnet.management_private.id
+  route_table_id = aws_route_table.management_private.id
 }
 
 resource "aws_route_table" "app_private" {
@@ -280,6 +352,17 @@ resource "aws_route_table" "app_private" {
   }
 }
 
+resource "aws_route" "app_private_default" {
+  route_table_id         = aws_route_table.app_private.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.app.id
+}
+
+resource "aws_route_table_association" "app_private_assoc" {
+  subnet_id      = aws_subnet.app_private.id
+  route_table_id = aws_route_table.app_private.id
+}
+
 resource "aws_route_table" "inspection_private" {
   vpc_id = aws_vpc.inspection.id
 
@@ -288,14 +371,10 @@ resource "aws_route_table" "inspection_private" {
   }
 }
 
-resource "aws_route_table_association" "management_private_assoc" {
-  subnet_id      = aws_subnet.management_private.id
-  route_table_id = aws_route_table.management_private.id
-}
-
-resource "aws_route_table_association" "app_private_assoc" {
-  subnet_id      = aws_subnet.app_private.id
-  route_table_id = aws_route_table.app_private.id
+resource "aws_route" "inspection_private_default" {
+  route_table_id         = aws_route_table.inspection_private.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.inspection.id
 }
 
 resource "aws_route_table_association" "inspection_private_assoc" {
@@ -450,7 +529,7 @@ resource "aws_security_group" "app_sg" {
   }
 }
 
-# >>> NEW: Palo Alto Management SG (for mgmt eth0 in inspection-mgmt subnet)
+# Palo Alto Management SG (for mgmt eth0 in inspection-mgmt subnet)
 resource "aws_security_group" "palo_mgmt_sg" {
   name        = "palo-mgmt-sg"
   description = "Security group for Palo Alto management interface"
@@ -526,7 +605,7 @@ resource "aws_instance" "nginx" {
 ########################################
 
 # Manually deploy Palo Alto in Inspection VPC with three ENIs:
-#  - eth0 (mgmt)      -> subnet: aws_subnet.inspection_mgmt.id  + SG: aws_security_group.palo_mgmt_sg.id
-#  - eth1 (untrust)   -> subnet: aws_subnet.inspection_public.id (assign EIP)
-#  - eth2 (trust)     -> subnet: aws_subnet.inspection_private.id
-# Then we will steer TGW routes through the firewall for egress/East-West.
+#  - eth0 (mgmt)  -> subnet: aws_subnet.inspection_mgmt.id  + SG: aws_security_group.palo_mgmt_sg.id
+#  - eth1 (untrust) -> subnet: aws_subnet.inspection_public.id (assign EIP)
+#  - eth2 (trust)   -> subnet: aws_subnet.inspection_private.id
+# Then steer TGW routes through the firewall for egress / East-West.
