@@ -1,9 +1,8 @@
-###########################################
-# ACME CORP / ADVANTUS360 NETWORK INSPECTION POC
-# Terraform: Centralized Inspection Architecture (AWS)
+#############################################
+# ACME CORP / ADVANTUS360 Palo Alto NVA POC
+# Terraform Infrastructure (AWS)
 # Region: us-west-2
-# Palo Alto NVAs will be deployed manually by user.
-###########################################
+#############################################
 
 terraform {
   required_version = ">= 1.6.0"
@@ -19,9 +18,9 @@ provider "aws" {
   region = var.region
 }
 
-###########################################
+#############################################
 # VARIABLES
-###########################################
+#############################################
 
 variable "region" {
   description = "AWS region for deployment"
@@ -33,9 +32,9 @@ variable "azs" {
   default     = ["us-west-2a", "us-west-2b"]
 }
 
-###########################################
+#############################################
 # MANAGEMENT VPC
-###########################################
+#############################################
 
 module "mgmt_vpc" {
   source  = "terraform-aws-modules/vpc/aws"
@@ -47,7 +46,7 @@ module "mgmt_vpc" {
 
   private_subnets = ["10.10.1.0/24", "10.10.2.0/24"]
   public_subnets  = ["10.10.11.0/24", "10.10.12.0/24"]
-  tgw_subnets     = ["10.10.21.0/24", "10.10.22.0/24"]
+  intra_subnets   = ["10.10.21.0/24", "10.10.22.0/24"] # TGW attachment subnets
 
   enable_nat_gateway = true
   single_nat_gateway = true
@@ -58,9 +57,9 @@ module "mgmt_vpc" {
   tags = { Environment = "POC", Name = "Mgmt-VPC" }
 }
 
-###########################################
+#############################################
 # APPLICATION VPC
-###########################################
+#############################################
 
 module "app_vpc" {
   source  = "terraform-aws-modules/vpc/aws"
@@ -72,7 +71,7 @@ module "app_vpc" {
 
   private_subnets = ["10.20.1.0/24", "10.20.2.0/24"]
   public_subnets  = ["10.20.11.0/24", "10.20.12.0/24"]
-  tgw_subnets     = ["10.20.21.0/24", "10.20.22.0/24"]
+  intra_subnets   = ["10.20.21.0/24", "10.20.22.0/24"] # TGW attachment subnets
 
   enable_nat_gateway = true
   single_nat_gateway = true
@@ -83,9 +82,9 @@ module "app_vpc" {
   tags = { Environment = "POC", Name = "App-VPC" }
 }
 
-###########################################
-# INSPECTION VPC
-###########################################
+#############################################
+# INSPECTION VPC (for Palo Alto NVAs)
+#############################################
 
 module "inspection_vpc" {
   source  = "terraform-aws-modules/vpc/aws"
@@ -95,12 +94,10 @@ module "inspection_vpc" {
   cidr = "10.30.0.0/16"
   azs  = var.azs
 
-  public_subnets    = ["10.30.11.0/24", "10.30.12.0/24"]
-  management_subnets = ["10.30.21.0/24", "10.30.22.0/24"]
-  trust_subnets      = ["10.30.31.0/24", "10.30.32.0/24"]
-  untrust_subnets    = ["10.30.41.0/24", "10.30.42.0/24"]
-  gwlb_subnets       = ["10.30.51.0/24", "10.30.52.0/24"]
-  tgw_subnets        = ["10.30.61.0/24", "10.30.62.0/24"]
+  public_subnets     = ["10.30.11.0/24", "10.30.12.0/24"]  # untrust
+  private_subnets    = ["10.30.21.0/24", "10.30.22.0/24"]  # trust
+  intra_subnets      = ["10.30.31.0/24", "10.30.32.0/24"]  # TGW attachment
+  gwlb_subnets       = ["10.30.41.0/24", "10.30.42.0/24"]  # GWLB interface
 
   enable_dns_hostnames = true
   enable_dns_support   = true
@@ -108,19 +105,18 @@ module "inspection_vpc" {
   tags = { Environment = "POC", Name = "Inspection-VPC" }
 }
 
-###########################################
-# TRANSIT GATEWAY
-###########################################
+#############################################
+# TRANSIT GATEWAY & ROUTING
+#############################################
 
 resource "aws_ec2_transit_gateway" "main" {
-  description = "Centralized TGW for Inspection POC"
+  description = "Central TGW for inspection routing"
   amazon_side_asn = 64512
   default_route_table_association = "disable"
   default_route_table_propagation = "disable"
-  tags = { Environment = "POC", Name = "central-tgw" }
+  tags = { Name = "central-tgw" }
 }
 
-# Route tables
 resource "aws_ec2_transit_gateway_route_table" "spoke" {
   transit_gateway_id = aws_ec2_transit_gateway.main.id
   tags = { Name = "spoke-rt" }
@@ -133,25 +129,25 @@ resource "aws_ec2_transit_gateway_route_table" "inspection" {
 
 # Attachments
 resource "aws_ec2_transit_gateway_vpc_attachment" "mgmt" {
-  subnet_ids         = module.mgmt_vpc.tgw_subnets
+  subnet_ids         = module.mgmt_vpc.intra_subnets
   vpc_id             = module.mgmt_vpc.vpc_id
   transit_gateway_id = aws_ec2_transit_gateway.main.id
   tags               = { Name = "mgmt-attachment" }
 }
 
 resource "aws_ec2_transit_gateway_vpc_attachment" "app" {
-  subnet_ids         = module.app_vpc.tgw_subnets
+  subnet_ids         = module.app_vpc.intra_subnets
   vpc_id             = module.app_vpc.vpc_id
   transit_gateway_id = aws_ec2_transit_gateway.main.id
   tags               = { Name = "app-attachment" }
 }
 
 resource "aws_ec2_transit_gateway_vpc_attachment" "inspection" {
-  subnet_ids         = module.inspection_vpc.tgw_subnets
-  vpc_id             = module.inspection_vpc.vpc_id
-  transit_gateway_id = aws_ec2_transit_gateway.main.id
+  subnet_ids             = module.inspection_vpc.intra_subnets
+  vpc_id                 = module.inspection_vpc.vpc_id
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
   appliance_mode_support = "enable"
-  tags = { Name = "inspection-attachment" }
+  tags                   = { Name = "inspection-attachment" }
 }
 
 # Associations
@@ -170,22 +166,22 @@ resource "aws_ec2_transit_gateway_route_table_association" "inspection_assoc" {
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.inspection.id
 }
 
-# Routes
-resource "aws_ec2_transit_gateway_route" "spoke_to_inspect" {
+# Routing between spokes and inspection
+resource "aws_ec2_transit_gateway_route" "spoke_to_inspection" {
   destination_cidr_block         = "0.0.0.0/0"
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.inspection.id
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.spoke.id
 }
 
-resource "aws_ec2_transit_gateway_route" "inspect_to_spokes" {
+resource "aws_ec2_transit_gateway_route" "inspection_to_spokes" {
   destination_cidr_block         = "10.0.0.0/8"
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.app.id
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.inspection.id
 }
 
-###########################################
-# GATEWAY LOAD BALANCER + SERVICE
-###########################################
+#############################################
+# GATEWAY LOAD BALANCER (for Palo Alto)
+#############################################
 
 resource "aws_lb" "gwlb" {
   name               = "inspection-gwlb"
@@ -205,21 +201,21 @@ resource "aws_lb_target_group" "gwlb_tg" {
     protocol = "TCP"
   }
 
-  tags = { Name = "gwlb-target-group" }
+  tags = { Name = "inspection-gwlb-tg" }
 }
 
-resource "aws_vpc_endpoint_service" "gwlb_svc" {
+resource "aws_vpc_endpoint_service" "gwlb_service" {
   acceptance_required        = false
   gateway_load_balancer_arns = [aws_lb.gwlb.arn]
-  tags                       = { Name = "inspection-gwlb-svc" }
+  tags                       = { Name = "inspection-gwlb-service" }
 }
 
-###########################################
-# GWLBe ENDPOINTS (App & Mgmt)
-###########################################
+#############################################
+# GWLBe ENDPOINTS in APP & MGMT VPCs
+#############################################
 
 resource "aws_vpc_endpoint" "mgmt_gwlbe" {
-  service_name      = aws_vpc_endpoint_service.gwlb_svc.service_name
+  service_name      = aws_vpc_endpoint_service.gwlb_service.service_name
   vpc_id            = module.mgmt_vpc.vpc_id
   subnet_ids        = module.mgmt_vpc.public_subnets
   vpc_endpoint_type = "GatewayLoadBalancer"
@@ -227,16 +223,16 @@ resource "aws_vpc_endpoint" "mgmt_gwlbe" {
 }
 
 resource "aws_vpc_endpoint" "app_gwlbe" {
-  service_name      = aws_vpc_endpoint_service.gwlb_svc.service_name
+  service_name      = aws_vpc_endpoint_service.gwlb_service.service_name
   vpc_id            = module.app_vpc.vpc_id
   subnet_ids        = module.app_vpc.public_subnets
   vpc_endpoint_type = "GatewayLoadBalancer"
   tags              = { Name = "app-gwlbe" }
 }
 
-###########################################
-# NETWORK LOAD BALANCER (Ingress)
-###########################################
+#############################################
+# NLB (Ingress entry point for web traffic)
+#############################################
 
 resource "aws_lb" "app_nlb" {
   name               = "app-ingress-nlb"
@@ -246,12 +242,12 @@ resource "aws_lb" "app_nlb" {
 }
 
 resource "aws_lb_target_group" "app_nlb_tg" {
-  name         = "app-nlb-tg"
-  port         = 80
-  protocol     = "TCP"
-  vpc_id       = module.app_vpc.vpc_id
-  target_type  = "ip"
-  tags         = { Name = "app-nlb-tg" }
+  name        = "app-nlb-tg"
+  port        = 80
+  protocol    = "TCP"
+  vpc_id      = module.app_vpc.vpc_id
+  target_type = "ip"
+  tags        = { Name = "app-nlb-tg" }
 }
 
 resource "aws_lb_listener" "app_nlb_listener" {
@@ -265,9 +261,18 @@ resource "aws_lb_listener" "app_nlb_listener" {
   }
 }
 
-###########################################
-# EC2 INSTANCES (Mgmt Bastion + App Server)
-###########################################
+#############################################
+# EC2 INSTANCES: Bastion (Mgmt) & Web (App)
+#############################################
+
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
+}
 
 resource "aws_instance" "bastion" {
   ami                    = data.aws_ami.amazon_linux.id
@@ -278,10 +283,10 @@ resource "aws_instance" "bastion" {
 }
 
 resource "aws_instance" "app_server" {
-  ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t3.micro"
-  subnet_id              = element(module.app_vpc.private_subnets, 0)
-  user_data              = <<-EOF
+  ami           = data.aws_ami.amazon_linux.id
+  instance_type = "t3.micro"
+  subnet_id     = element(module.app_vpc.private_subnets, 0)
+  user_data     = <<-EOF
     #!/bin/bash
     dnf install -y nginx
     systemctl enable nginx
@@ -290,9 +295,9 @@ resource "aws_instance" "app_server" {
   tags = { Name = "app-nginx" }
 }
 
-###########################################
-# IAM / SSM ACCESS
-###########################################
+#############################################
+# IAM/SSM for Secure Access
+#############################################
 
 data "aws_iam_policy_document" "ssm_trust" {
   statement {
@@ -318,18 +323,4 @@ resource "aws_iam_role_policy_attachment" "ssm_core_attach" {
 resource "aws_iam_instance_profile" "ssm_instance_profile" {
   name = "ssm-instance-profile"
   role = aws_iam_role.ssm_role.name
-}
-
-###########################################
-# AMI SOURCE
-###########################################
-
-data "aws_ami" "amazon_linux" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
-  }
 }
