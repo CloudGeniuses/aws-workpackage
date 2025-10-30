@@ -44,7 +44,7 @@ variable "key_pair" {
 variable "azs" {
   description = "Availability zones list"
   type        = list(string)
-  default = [
+  default     = [
     "a",
     "b"
   ]
@@ -169,6 +169,18 @@ resource "aws_subnet" "inspection_private" {
   }
 }
 
+# NEW: Dedicated management subnet for Palo mgmt interface (eth0)
+resource "aws_subnet" "inspection_mgmt" {
+  vpc_id                  = aws_vpc.inspection.id
+  cidr_block              = "10.30.10.0/24"
+  availability_zone       = "${var.aws_region}${var.azs[0]}"
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "inspection-mgmt"
+  }
+}
+
 ########################################
 # INTERNET & NAT GATEWAYS
 ########################################
@@ -254,17 +266,26 @@ resource "aws_nat_gateway" "inspection" {
 
 resource "aws_route_table" "management_private" {
   vpc_id = aws_vpc.management.id
-  tags = { Name = "management-private-rt" }
+
+  tags = {
+    Name = "management-private-rt"
+  }
 }
 
 resource "aws_route_table" "app_private" {
   vpc_id = aws_vpc.app.id
-  tags = { Name = "app-private-rt" }
+
+  tags = {
+    Name = "app-private-rt"
+  }
 }
 
 resource "aws_route_table" "inspection_private" {
   vpc_id = aws_vpc.inspection.id
-  tags = { Name = "inspection-private-rt" }
+
+  tags = {
+    Name = "inspection-private-rt"
+  }
 }
 
 resource "aws_route_table_association" "management_private_assoc" {
@@ -295,10 +316,7 @@ resource "aws_ec2_transit_gateway" "tgw" {
 }
 
 resource "aws_ec2_transit_gateway_vpc_attachment" "management_attach" {
-  subnet_ids = [
-    aws_subnet.management_private.id
-  ]
-
+  subnet_ids         = [aws_subnet.management_private.id]
   transit_gateway_id = aws_ec2_transit_gateway.tgw.id
   vpc_id             = aws_vpc.management.id
 
@@ -308,10 +326,7 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "management_attach" {
 }
 
 resource "aws_ec2_transit_gateway_vpc_attachment" "app_attach" {
-  subnet_ids = [
-    aws_subnet.app_private.id
-  ]
-
+  subnet_ids         = [aws_subnet.app_private.id]
   transit_gateway_id = aws_ec2_transit_gateway.tgw.id
   vpc_id             = aws_vpc.app.id
 
@@ -321,10 +336,7 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "app_attach" {
 }
 
 resource "aws_ec2_transit_gateway_vpc_attachment" "inspection_attach" {
-  subnet_ids = [
-    aws_subnet.inspection_private.id
-  ]
-
+  subnet_ids         = [aws_subnet.inspection_private.id]
   transit_gateway_id = aws_ec2_transit_gateway.tgw.id
   vpc_id             = aws_vpc.inspection.id
 
@@ -444,11 +456,11 @@ resource "aws_security_group" "app_sg" {
 ########################################
 
 resource "aws_instance" "bastion" {
-  ami                   = "ami-0c5204531f799e0c6"
-  instance_type         = "t3.micro"
-  subnet_id             = aws_subnet.management_private.id
-  iam_instance_profile  = aws_iam_instance_profile.ssm_profile.name
-  security_groups       = [aws_security_group.management_sg.id]
+  ami                  = "ami-0c5204531f799e0c6"
+  instance_type        = "t3.micro"
+  subnet_id            = aws_subnet.management_private.id
+  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
+  security_groups      = [aws_security_group.management_sg.id]
 
   tags = {
     Name = "Management-Bastion"
@@ -456,11 +468,11 @@ resource "aws_instance" "bastion" {
 }
 
 resource "aws_instance" "nginx" {
-  ami                   = "ami-0c5204531f799e0c6"
-  instance_type         = "t3.micro"
-  subnet_id             = aws_subnet.app_private.id
-  iam_instance_profile  = aws_iam_instance_profile.ssm_profile.name
-  security_groups       = [aws_security_group.app_sg.id]
+  ami                  = "ami-0c5204531f799e0c6"
+  instance_type        = "t3.micro"
+  subnet_id            = aws_subnet.app_private.id
+  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
+  security_groups      = [aws_security_group.app_sg.id]
 
   tags = {
     Name = "App-NGINX"
@@ -479,6 +491,8 @@ resource "aws_instance" "nginx" {
 # PLACEHOLDER - PALO ALTO NVA
 ########################################
 
-# Manually deploy Palo Alto in Inspection VPC
-# Use subnets: inspection_public / inspection_private
-# Ensure TGW routes go through your Palo Alto interfaces for inspection
+# Manually deploy Palo Alto in Inspection VPC with three ENIs:
+#  - eth0 (mgmt)      -> subnet: aws_subnet.inspection_mgmt.id
+#  - eth1 (untrust)   -> subnet: aws_subnet.inspection_public.id  (assign EIP)
+#  - eth2 (trust)     -> subnet: aws_subnet.inspection_private.id
+# Make sure TGW routes are steered through the firewall for egress/East-West.
