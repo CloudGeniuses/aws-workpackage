@@ -650,6 +650,64 @@ resource "aws_route_table_association" "a_ins_tgw_az2" {
   route_table_id = aws_route_table.ins_tgw_rt_az2.id
 }
 
+# =========================
+# INSPECTION VPC – EXTRA RTs
+# =========================
+
+# Untrust AZ1/2 route tables → 0/0 to IGW
+resource "aws_route_table" "ins_untr_rt_az1" {
+  vpc_id = aws_vpc.ins.id
+  tags   = { Name = "rt-ins-untrust-az1" }
+}
+
+resource "aws_route_table" "ins_untr_rt_az2" {
+  vpc_id = aws_vpc.ins.id
+  tags   = { Name = "rt-ins-untrust-az2" }
+}
+
+resource "aws_route" "ins_untr_az1_default_igw" {
+  route_table_id         = aws_route_table.ins_untr_rt_az1.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.ins_igw.id
+}
+
+resource "aws_route" "ins_untr_az2_default_igw" {
+  route_table_id         = aws_route_table.ins_untr_rt_az2.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.ins_igw.id
+}
+
+resource "aws_route_table_association" "a_ins_untr_az1" {
+  subnet_id      = aws_subnet.ins_untr_az1.id
+  route_table_id = aws_route_table.ins_untr_rt_az1.id
+}
+
+resource "aws_route_table_association" "a_ins_untr_az2" {
+  subnet_id      = aws_subnet.ins_untr_az2.id
+  route_table_id = aws_route_table.ins_untr_rt_az2.id
+}
+
+# Trust AZ1/2 route tables – local only (no 0/0)
+resource "aws_route_table" "ins_trust_rt_az1" {
+  vpc_id = aws_vpc.ins.id
+  tags   = { Name = "rt-ins-trust-az1" }
+}
+
+resource "aws_route_table" "ins_trust_rt_az2" {
+  vpc_id = aws_vpc.ins.id
+  tags   = { Name = "rt-ins-trust-az2" }
+}
+
+resource "aws_route_table_association" "a_ins_trust_az1" {
+  subnet_id      = aws_subnet.ins_trust_az1.id
+  route_table_id = aws_route_table.ins_trust_rt_az1.id
+}
+
+resource "aws_route_table_association" "a_ins_trust_az2" {
+  subnet_id      = aws_subnet.ins_trust_az2.id
+  route_table_id = aws_route_table.ins_trust_rt_az2.id
+}
+
 ############################################
 # Security Groups (least-privilege)
 ############################################
@@ -774,65 +832,30 @@ resource "aws_security_group" "palo_mgmt_sg" {
   }
 }
 
-# VPC endpoints SGs – allow 443 from within each VPC CIDR
-resource "aws_security_group" "vpce_mgmt" {
-  name        = "vpce-mgmt"
-  description = "Interface Endpoints allow 443 from VPC"
-  vpc_id      = aws_vpc.mgmt.id
+# =========================
+# PALO DATAPLANE SECURITY GROUPS
+# =========================
 
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.mgmt_cidr]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "sg-vpce-mgmt"
-  }
-}
-
-resource "aws_security_group" "vpce_app" {
-  name        = "vpce-app"
-  description = "Interface Endpoints allow 443 from VPC"
-  vpc_id      = aws_vpc.app.id
-
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.app_cidr]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "sg-vpce-app"
-  }
-}
-
-resource "aws_security_group" "vpce_ins" {
-  name        = "vpce-ins"
-  description = "Interface Endpoints allow 443 from VPC"
+# SG for Palo TRUST dataplane ENIs
+resource "aws_security_group" "palo_trust_sg" {
+  name        = "palo-trust-dataplane"
+  description = "Allow GWLB GENEVE/HC to Palo trust"
   vpc_id      = aws_vpc.ins.id
 
+  # GENEVE data plane from GWLB
   ingress {
-    from_port   = 443
-    to_port     = 443
+    from_port   = 6081
+    to_port     = 6081
+    protocol    = "udp"
+    cidr_blocks = [aws_subnet.ins_gwlb_az1.cidr_block, aws_subnet.ins_gwlb_az2.cidr_block]
+  }
+
+  # Health check (TCP/80) from GWLB
+  ingress {
+    from_port   = 80
+    to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = [var.inspection_cidr]
+    cidr_blocks = [aws_subnet.ins_gwlb_az1.cidr_block, aws_subnet.ins_gwlb_az2.cidr_block]
   }
 
   egress {
@@ -842,9 +865,39 @@ resource "aws_security_group" "vpce_ins" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "sg-vpce-ins"
+  tags = { Name = "sg-palo-trust" }
+}
+
+# SG for Palo UNTRUST dataplane ENIs
+resource "aws_security_group" "palo_untrust_sg" {
+  name        = "palo-untrust-dataplane"
+  description = "Allow internet egress; GWLB health/data if used on untrust"
+  vpc_id      = aws_vpc.ins.id
+
+  # (Optional) If GWLB sends to untrust too; keep symmetrical to trust
+  ingress {
+    from_port   = 6081
+    to_port     = 6081
+    protocol    = "udp"
+    cidr_blocks = [aws_subnet.ins_gwlb_az1.cidr_block, aws_subnet.ins_gwlb_az2.cidr_block]
   }
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [aws_subnet.ins_gwlb_az1.cidr_block, aws_subnet.ins_gwlb_az2.cidr_block]
+  }
+
+  # Egress to internet (tighten per policy)
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "sg-palo-untrust" }
 }
 
 ############################################
@@ -929,14 +982,14 @@ resource "aws_vpc_endpoint" "ins_ssm" {
 #   default = "cloudgeniussaadv361"
 # }
 # resource "aws_s3_bucket" "bootstrap_1" {
-#   bucket = var.bootstrap_bucket_1
+#   bucket        = var.bootstrap_bucket_1
 #   force_destroy = false
-#   tags = { Name = var.bootstrap_bucket_1 }
+#   tags          = { Name = var.bootstrap_bucket_1 }
 # }
 # resource "aws_s3_bucket" "bootstrap_2" {
-#   bucket = var.bootstrap_bucket_2
+#   bucket        = var.bootstrap_bucket_2
 #   force_destroy = false
-#   tags = { Name = var.bootstrap_bucket_2 }
+#   tags          = { Name = var.bootstrap_bucket_2 }
 # }
 
 ############################################
