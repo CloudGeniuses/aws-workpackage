@@ -1,15 +1,14 @@
 ############################################
-# Advantus360 – Centralized Inspection POC (Final)
+# Advantus360 – Centralized Inspection POC (Final, S3 optional commented)
 # TGW + GWLB + 3 VPCs (Mgmt / App / Inspection)
-# - 100% meets POC asks:
-#   * Palo Alto NVA (manual deploy only) with centralized inspection
-#   * High Availability across 2 AZs
-#   * East/West (VPC↔VPC) policy via TGW→Inspection
-#   * Egress traffic control through Palo (spokes default to TGW)
-#   * Ingress controls via NLB→GWLBe→GWLB→Palo for:
-#       - HTTP/HTTPS to App web
-#       - SSH to Mgmt bastion
-# - All variables are multi-line; HCL is Terraform Cloud–ready
+# - Palo Alto NVA: manual deploy (you add two trust IPs to GWLB TG)
+# - HA across 2 AZs
+# - East/West via TGW → Inspection
+# - Egress control through Palo (spokes default to TGW)
+# - Ingress service-chaining (NLB → GWLBe → GWLB → Palo) for:
+#     * HTTP/HTTPS to App web
+#     * SSH to Mgmt bastion
+# - Variables are multi-line; HCL is Terraform Cloud–ready
 ############################################
 
 terraform {
@@ -24,7 +23,7 @@ terraform {
 }
 
 ############################################
-# Variables (multi-line, one argument per line)
+# Variables (multi-line)
 ############################################
 
 variable "aws_region" {
@@ -342,7 +341,6 @@ resource "aws_route_table_association" "a_mgmt_pub_az2" {
   route_table_id = aws_route_table.mgmt_pub_rt_az2.id
 }
 
-# Internet on public subnets
 resource "aws_route" "mgmt_pub_az1_igw" {
   route_table_id         = aws_route_table.mgmt_pub_rt_az1.id
   destination_cidr_block = "0.0.0.0/0"
@@ -440,7 +438,6 @@ resource "aws_subnet" "app_tgw_az2" {
   }
 }
 
-# Route tables – App
 resource "aws_route_table" "app_priv_rt_az1" {
   vpc_id = aws_vpc.app.id
 
@@ -654,12 +651,13 @@ resource "aws_route_table_association" "a_ins_tgw_az2" {
 }
 
 ############################################
-# Security Groups
+# Security Groups (least-privilege)
 ############################################
 
-resource "aws_security_group" "mgmt_default" {
-  name        = "mgmt-default"
-  description = "SSM-only outbound"
+# SSM-only outbound (no inbound) – used for general instances if needed
+resource "aws_security_group" "mgmt_default_egress" {
+  name        = "mgmt-default-egress"
+  description = "No inbound; allow all egress"
   vpc_id      = aws_vpc.mgmt.id
 
   egress {
@@ -670,27 +668,98 @@ resource "aws_security_group" "mgmt_default" {
   }
 
   tags = {
-    Name = "sg-mgmt-default"
+    Name = "sg-mgmt-default-egress"
   }
 }
 
-resource "aws_security_group" "palo_mgmt_sg" {
-  name        = "palo-mgmt"
-  description = "Bastion -> Palo mgmt HTTPS/SSH"
-  vpc_id      = aws_vpc.ins.id
+# Bastion must accept SSH from inspection trust (after Palo allows)
+resource "aws_security_group" "bastion_sg" {
+  name        = "bastion-ssh-from-inspection"
+  description = "Allow SSH from Palo trust subnets"
+  vpc_id      = aws_vpc.mgmt.id
 
   ingress {
-    from_port       = 443
-    to_port         = 443
-    protocol        = "tcp"
-    security_groups = [aws_security_group.mgmt_default.id]
+    description = "SSH from Inspection Trust AZ1"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.ins_trust_az1]
   }
 
   ingress {
+    description = "SSH from Inspection Trust AZ2"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.ins_trust_az2]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "sg-bastion-ssh"
+  }
+}
+
+# App web must accept HTTP from inspection trust (post-inspection)
+resource "aws_security_group" "app_web_sg" {
+  name        = "app-web-http-from-inspection"
+  description = "Allow HTTP from Palo trust subnets"
+  vpc_id      = aws_vpc.app.id
+
+  ingress {
+    description = "HTTP from Inspection Trust AZ1"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [var.ins_trust_az1]
+  }
+
+  ingress {
+    description = "HTTP from Inspection Trust AZ2"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [var.ins_trust_az2]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "sg-app-web"
+  }
+}
+
+# Palo Mgmt SG – bastion -> Palo mgmt (HTTPS/SSH) over mgmt subnets
+resource "aws_security_group" "palo_mgmt_sg" {
+  name        = "palo-mgmt"
+  description = "Bastion to Palo mgmt (HTTPS/SSH)"
+  vpc_id      = aws_vpc.ins.id
+
+  ingress {
+    description     = "HTTPS from bastion SG"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = [aws_security_group.bastion_sg.id]
+  }
+
+  ingress {
+    description     = "SSH from bastion SG"
     from_port       = 22
     to_port         = 22
     protocol        = "tcp"
-    security_groups = [aws_security_group.mgmt_default.id]
+    security_groups = [aws_security_group.bastion_sg.id]
   }
 
   egress {
@@ -705,9 +774,11 @@ resource "aws_security_group" "palo_mgmt_sg" {
   }
 }
 
+# VPC endpoints SGs – allow 443 from within each VPC CIDR
 resource "aws_security_group" "vpce_mgmt" {
-  name   = "vpce-mgmt"
-  vpc_id = aws_vpc.mgmt.id
+  name        = "vpce-mgmt"
+  description = "Interface Endpoints allow 443 from VPC"
+  vpc_id      = aws_vpc.mgmt.id
 
   ingress {
     from_port   = 443
@@ -722,11 +793,16 @@ resource "aws_security_group" "vpce_mgmt" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = {
+    Name = "sg-vpce-mgmt"
+  }
 }
 
 resource "aws_security_group" "vpce_app" {
-  name   = "vpce-app"
-  vpc_id = aws_vpc.app.id
+  name        = "vpce-app"
+  description = "Interface Endpoints allow 443 from VPC"
+  vpc_id      = aws_vpc.app.id
 
   ingress {
     from_port   = 443
@@ -741,11 +817,16 @@ resource "aws_security_group" "vpce_app" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = {
+    Name = "sg-vpce-app"
+  }
 }
 
 resource "aws_security_group" "vpce_ins" {
-  name   = "vpce-ins"
-  vpc_id = aws_vpc.ins.id
+  name        = "vpce-ins"
+  description = "Interface Endpoints allow 443 from VPC"
+  vpc_id      = aws_vpc.ins.id
 
   ingress {
     from_port   = 443
@@ -760,10 +841,15 @@ resource "aws_security_group" "vpce_ins" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = {
+    Name = "sg-vpce-ins"
+  }
 }
 
 ############################################
-# SSM (Interface) + S3 (Gateway) Endpoints – Mgmt/App/Inspection
+# SSM (Interface) Endpoints – Mgmt/App/Inspection
+# S3 endpoints and bootstrap buckets OPTIONAL → commented below
 ############################################
 
 locals {
@@ -785,18 +871,7 @@ resource "aws_vpc_endpoint" "mgmt_ssm" {
   subnet_ids          = [aws_subnet.mgmt_priv_az1.id, aws_subnet.mgmt_priv_az2.id]
 
   tags = {
-    Name = "mgmt-${replace(each.value, ".", "-"}"
-  }
-}
-
-resource "aws_vpc_endpoint" "mgmt_s3" {
-  vpc_id            = aws_vpc.mgmt.id
-  vpc_endpoint_type = "Gateway"
-  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
-  route_table_ids   = [aws_route_table.mgmt_priv_rt_az1.id, aws_route_table.mgmt_priv_rt_az2.id]
-
-  tags = {
-    Name = "mgmt-s3-gateway"
+    Name = "mgmt-${replace(each.value, ".", "-")}"
   }
 }
 
@@ -811,18 +886,7 @@ resource "aws_vpc_endpoint" "app_ssm" {
   subnet_ids          = [aws_subnet.app_priv_az1.id, aws_subnet.app_priv_az2.id]
 
   tags = {
-    Name = "app-${replace(each.value, ".", "-"}"
-  }
-}
-
-resource "aws_vpc_endpoint" "app_s3" {
-  vpc_id            = aws_vpc.app.id
-  vpc_endpoint_type = "Gateway"
-  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
-  route_table_ids   = [aws_route_table.app_priv_rt_az1.id, aws_route_table.app_priv_rt_az2.id]
-
-  tags = {
-    Name = "app-s3-gateway"
+    Name = "app-${replace(each.value, ".", "-")}"
   }
 }
 
@@ -837,9 +901,43 @@ resource "aws_vpc_endpoint" "ins_ssm" {
   subnet_ids          = [aws_subnet.ins_mgmt_az1.id, aws_subnet.ins_mgmt_az2.id]
 
   tags = {
-    Name = "ins-${replace(each.value, ".", "-"}"
+    Name = "ins-${replace(each.value, ".", "-")}"
   }
 }
+
+# OPTIONAL: S3 gateway endpoints + bootstrap buckets (commented out)
+# resource "aws_vpc_endpoint" "mgmt_s3" {
+#   vpc_id            = aws_vpc.mgmt.id
+#   vpc_endpoint_type = "Gateway"
+#   service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+#   route_table_ids   = [aws_route_table.mgmt_priv_rt_az1.id, aws_route_table.mgmt_priv_rt_az2.id]
+#   tags = { Name = "mgmt-s3-gateway" }
+# }
+# resource "aws_vpc_endpoint" "app_s3" {
+#   vpc_id            = aws_vpc.app.id
+#   vpc_endpoint_type = "Gateway"
+#   service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+#   route_table_ids   = [aws_route_table.app_priv_rt_az1.id, aws_route_table.app_priv_rt_az2.id]
+#   tags = { Name = "app-s3-gateway" }
+# }
+# variable "bootstrap_bucket_1" {
+#   type    = string
+#   default = "cloudgeniussaadv360"
+# }
+# variable "bootstrap_bucket_2" {
+#   type    = string
+#   default = "cloudgeniussaadv361"
+# }
+# resource "aws_s3_bucket" "bootstrap_1" {
+#   bucket = var.bootstrap_bucket_1
+#   force_destroy = false
+#   tags = { Name = var.bootstrap_bucket_1 }
+# }
+# resource "aws_s3_bucket" "bootstrap_2" {
+#   bucket = var.bootstrap_bucket_2
+#   force_destroy = false
+#   tags = { Name = var.bootstrap_bucket_2 }
+# }
 
 ############################################
 # SSM Bastion (Mgmt VPC) + Demo Web (App VPC)
@@ -886,11 +984,11 @@ resource "aws_iam_instance_profile" "bastion_profile" {
 }
 
 resource "aws_instance" "ssm_bastion" {
-  ami                    = data.aws_ami.al2023.id
-  instance_type          = var.bastion_instance_type
-  subnet_id              = aws_subnet.mgmt_priv_az1.id
-  iam_instance_profile   = aws_iam_instance_profile.bastion_profile.name
-  vpc_security_group_ids = [aws_security_group.mgmt_default.id]
+  ami                         = data.aws_ami.al2023.id
+  instance_type               = var.bastion_instance_type
+  subnet_id                   = aws_subnet.mgmt_priv_az1.id
+  iam_instance_profile        = aws_iam_instance_profile.bastion_profile.name
+  vpc_security_group_ids      = [aws_security_group.bastion_sg.id]
   associate_public_ip_address = false
 
   metadata_options {
@@ -904,10 +1002,10 @@ resource "aws_instance" "ssm_bastion" {
 }
 
 resource "aws_instance" "app_web" {
-  ami                   = data.aws_ami.al2023.id
-  instance_type         = var.web_instance_type
-  subnet_id             = aws_subnet.app_priv_az1.id
-  vpc_security_group_ids = [aws_security_group.vpce_app.id]
+  ami                    = data.aws_ami.al2023.id
+  instance_type          = var.web_instance_type
+  subnet_id              = aws_subnet.app_priv_az1.id
+  vpc_security_group_ids = [aws_security_group.app_web_sg.id]
 
   user_data = <<-EOT
               #!/bin/bash
@@ -984,7 +1082,7 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "att_ins" {
   subnet_ids             = [aws_subnet.ins_tgw_az1.id, aws_subnet.ins_tgw_az2.id]
   transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
   vpc_id                 = aws_vpc.ins.id
-  appliance_mode_support = "enable" # REQUIRED for inspection VPC
+  appliance_mode_support = "enable"
   dns_support            = "enable"
   ipv6_support           = "disable"
 
@@ -1028,7 +1126,7 @@ resource "aws_ec2_transit_gateway_route" "inspect_to_app" {
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.inspect_rt.id
 }
 
-# Spoke RTBs: add explicit routes for east/west via TGW
+# Spoke RTBs: explicit east/west routes via TGW
 resource "aws_route" "mgmt_rt_to_app_az1" {
   route_table_id         = aws_route_table.mgmt_priv_rt_az1.id
   destination_cidr_block = var.app_cidr
@@ -1053,7 +1151,7 @@ resource "aws_route" "app_rt_to_mgmt_az2" {
   transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
 }
 
-# Spoke RTBs: set default route to TGW (egress via inspection)
+# Spoke RTBs: default route to TGW (egress → inspection)
 resource "aws_route" "mgmt_priv_az1_default_to_tgw" {
   route_table_id         = aws_route_table.mgmt_priv_rt_az1.id
   destination_cidr_block = "0.0.0.0/0"
@@ -1106,6 +1204,7 @@ resource "aws_lb_target_group" "gwlb_tg" {
   vpc_id      = aws_vpc.ins.id
   target_type = "ip"
 
+  # Health check port/proto used for NVA dataplane reachability (adjust if desired)
   health_check {
     protocol = "TCP"
     port     = "80"
@@ -1178,7 +1277,7 @@ resource "aws_route" "ins_tgw_az2_to_gwlbe" {
 # - SSH to Mgmt bastion
 ############################################
 
-# Create GWLBe endpoints in SPOKE public subnets (to pair with NLBs)
+# GWLBe endpoints in SPOKE public subnets (pair with public NLBs)
 resource "aws_vpc_endpoint" "app_gwlbe_az1" {
   vpc_id            = aws_vpc.app.id
   vpc_endpoint_type = "GatewayLoadBalancer"
@@ -1360,16 +1459,17 @@ resource "aws_lb_target_group_attachment" "mgmt_gwlbe_target_az2" {
 }
 
 ############################################
-# Register Palo dataplane IPs (manual step)
+# Register Palo dataplane IPs (manual step after deploy)
 ############################################
-# Example (uncomment and fill when ready):
 # resource "aws_lb_target_group_attachment" "pan_az1" {
 #   target_group_arn = aws_lb_target_group.gwlb_tg.arn
-#   target_id        = "10.30.11.10" # Palo trust ENI AZ1
+#   target_id        = "10.30.11.10"  # Palo trust ENI in AZ1
+#   port             = 6081
 # }
 # resource "aws_lb_target_group_attachment" "pan_az2" {
 #   target_group_arn = aws_lb_target_group.gwlb_tg.arn
-#   target_id        = "10.30.12.10" # Palo trust ENI AZ2
+#   target_id        = "10.30.12.10"  # Palo trust ENI in AZ2
+#   port             = 6081
 # }
 
 ############################################
