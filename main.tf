@@ -249,19 +249,35 @@ resource "aws_nat_gateway" "inspection" {
 }
 
 ########################################
-# ROUTING
+# ROUTING (VPC & TGW)
 ########################################
 
+# Private Route Tables (tagged)
 resource "aws_route_table" "management_private" {
   vpc_id = aws_vpc.management.id
+
+  tags = {
+    Name = "management-private-rt"
+    Environment = "POC"
+  }
 }
 
 resource "aws_route_table" "app_private" {
   vpc_id = aws_vpc.app.id
+
+  tags = {
+    Name = "app-private-rt"
+    Environment = "POC"
+  }
 }
 
 resource "aws_route_table" "inspection_private" {
   vpc_id = aws_vpc.inspection.id
+
+  tags = {
+    Name = "inspection-private-rt"
+    Environment = "POC"
+  }
 }
 
 resource "aws_route_table_association" "management_private_assoc" {
@@ -280,7 +296,7 @@ resource "aws_route_table_association" "inspection_private_assoc" {
 }
 
 ########################################
-# TRANSIT GATEWAY
+# TRANSIT GATEWAY + ROUTE TABLES
 ########################################
 
 resource "aws_ec2_transit_gateway" "tgw" {
@@ -288,14 +304,24 @@ resource "aws_ec2_transit_gateway" "tgw" {
 
   tags = {
     Name = "Main-TGW"
+    Environment = "POC"
   }
 }
 
+resource "aws_ec2_transit_gateway_route_table" "tgw_main_rt" {
+  transit_gateway_id = aws_ec2_transit_gateway.tgw.id
+
+  tags = {
+    Name = "TGW-Main-RT"
+    Environment = "POC"
+  }
+}
+
+# Attachments
 resource "aws_ec2_transit_gateway_vpc_attachment" "management_attach" {
   subnet_ids = [
     aws_subnet.management_private.id
   ]
-
   transit_gateway_id = aws_ec2_transit_gateway.tgw.id
   vpc_id             = aws_vpc.management.id
 
@@ -308,7 +334,6 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "app_attach" {
   subnet_ids = [
     aws_subnet.app_private.id
   ]
-
   transit_gateway_id = aws_ec2_transit_gateway.tgw.id
   vpc_id             = aws_vpc.app.id
 
@@ -321,12 +346,58 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "inspection_attach" {
   subnet_ids = [
     aws_subnet.inspection_private.id
   ]
-
   transit_gateway_id = aws_ec2_transit_gateway.tgw.id
   vpc_id             = aws_vpc.inspection.id
 
   tags = {
     Name = "TGW-Attach-Inspection"
+  }
+}
+
+# TGW Route associations
+resource "aws_ec2_transit_gateway_route_table_association" "management_tgw_assoc" {
+  transit_gateway_attachment_id = aws_ec2_transit_gateway_vpc_attachment.management_attach.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.tgw_main_rt.id
+}
+
+resource "aws_ec2_transit_gateway_route_table_association" "app_tgw_assoc" {
+  transit_gateway_attachment_id = aws_ec2_transit_gateway_vpc_attachment.app_attach.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.tgw_main_rt.id
+}
+
+resource "aws_ec2_transit_gateway_route_table_association" "inspection_tgw_assoc" {
+  transit_gateway_attachment_id = aws_ec2_transit_gateway_vpc_attachment.inspection_attach.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.tgw_main_rt.id
+}
+
+# TGW Routes (tagged)
+resource "aws_ec2_transit_gateway_route" "route_to_app" {
+  destination_cidr_block         = aws_vpc.app.cidr_block
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.app_attach.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.tgw_main_rt.id
+
+  tags = {
+    Name = "TGW-Route-App"
+  }
+}
+
+resource "aws_ec2_transit_gateway_route" "route_to_management" {
+  destination_cidr_block         = aws_vpc.management.cidr_block
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.management_attach.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.tgw_main_rt.id
+
+  tags = {
+    Name = "TGW-Route-Management"
+  }
+}
+
+resource "aws_ec2_transit_gateway_route" "route_to_inspection" {
+  destination_cidr_block         = aws_vpc.inspection.cidr_block
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.inspection_attach.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.tgw_main_rt.id
+
+  tags = {
+    Name = "TGW-Route-Inspection"
   }
 }
 
@@ -378,9 +449,11 @@ resource "aws_security_group" "management_sg" {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = [
-      "0.0.0.0/0"
-    ]
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "SG-Management"
   }
 }
 
@@ -393,27 +466,25 @@ resource "aws_security_group" "app_sg" {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = [
-      aws_vpc.inspection.cidr_block
-    ]
+    cidr_blocks = [aws_vpc.inspection.cidr_block]
   }
 
   ingress {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = [
-      aws_vpc.inspection.cidr_block
-    ]
+    cidr_blocks = [aws_vpc.inspection.cidr_block]
   }
 
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = [
-      "0.0.0.0/0"
-    ]
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "SG-App"
   }
 }
 
@@ -422,13 +493,11 @@ resource "aws_security_group" "app_sg" {
 ########################################
 
 resource "aws_instance" "bastion" {
-  ami                   = "ami-0c5204531f799e0c6"
-  instance_type         = "t3.micro"
-  subnet_id             = aws_subnet.management_private.id
-  iam_instance_profile  = aws_iam_instance_profile.ssm_profile.name
-  security_groups        = [
-    aws_security_group.management_sg.id
-  ]
+  ami                  = "ami-0c5204531f799e0c6"
+  instance_type        = "t3.micro"
+  subnet_id            = aws_subnet.management_private.id
+  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
+  security_groups      = [aws_security_group.management_sg.id]
 
   tags = {
     Name = "Management-Bastion"
@@ -436,13 +505,11 @@ resource "aws_instance" "bastion" {
 }
 
 resource "aws_instance" "nginx" {
-  ami                   = "ami-0c5204531f799e0c6"
-  instance_type         = "t3.micro"
-  subnet_id             = aws_subnet.app_private.id
-  iam_instance_profile  = aws_iam_instance_profile.ssm_profile.name
-  security_groups        = [
-    aws_security_group.app_sg.id
-  ]
+  ami                  = "ami-0c5204531f799e0c6"
+  instance_type        = "t3.micro"
+  subnet_id            = aws_subnet.app_private.id
+  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
+  security_groups      = [aws_security_group.app_sg.id]
 
   tags = {
     Name = "App-NGINX"
@@ -461,6 +528,10 @@ resource "aws_instance" "nginx" {
 # PLACEHOLDER - PALO ALTO NVA
 ########################################
 
-# Manually deploy Palo Alto in Inspection VPC
-# Use subnets: inspection_public / inspection_private
-# Ensure TGW routes go through your Palo Alto interfaces for inspection
+# Manually deploy Palo Alto NVA in Inspection VPC:
+# - Use subnets: inspection_public / inspection_private
+# - Configure Eth1/1 (untrust) in inspection_public
+# - Configure Eth1/2 (trust) in inspection_private
+# - Attach TGW routes to inspection-private subnet for inspection
+# - Update route tables to send inter-VPC traffic through NVA
+
