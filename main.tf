@@ -1,9 +1,9 @@
 ############################################
-# cg-adv — Phase 1 (HA-Ready): Base Network & Security
-# - SSM-only mgmt (no public ingress)
-# - IGW + NAT GW per AZ (egress only)
-# - GWLB across 2 AZs + optional GWLBe routing (feature-flag)
-# - Palo mgmt SG (bastion -> 443/22)
+# Advantus360 – Centralized Inspection POC
+# TGW + GWLB + 3 VPCs (Mgmt / App / Inspection)
+# - Meets POC asks: HA, VPC-to-VPC (east/west) via Palo, egress control
+# - Ready for manual Palo Alto VM-Series deploy in Inspection VPC
+# - Ingress service-chaining (Internet -> NLB -> GWLB) can be added as Phase 2
 ############################################
 
 terraform {
@@ -18,83 +18,152 @@ terraform {
 }
 
 ############################################
-# Variables
+# Variables (multi-line, one argument per line)
 ############################################
 
 variable "aws_region" {
-  type        = string
-  description = "AWS region for all resources"
-  default     = "us-west-2"
+  type    = string
+  default = "us-west-2"
 }
 
 variable "az_1" {
-  type        = string
-  description = "Primary AZ"
-  default     = "us-west-2a"
+  type    = string
+  default = "us-west-2a"
 }
 
 variable "az_2" {
-  type        = string
-  description = "Secondary AZ"
-  default     = "us-west-2b"
+  type    = string
+  default = "us-west-2b"
 }
 
-variable "vpc_cidr" {
+# VPC CIDRs
+variable "mgmt_cidr" {
+  type    = string
+  default = "10.10.0.0/16"
+}
+
+variable "app_cidr" {
   type    = string
   default = "10.20.0.0/16"
 }
 
-# Private subnets (per AZ)
-variable "mgmt_cidr_az1" {
+variable "inspection_cidr" {
+  type    = string
+  default = "10.30.0.0/16"
+}
+
+# Mgmt subnets
+variable "mgmt_priv_az1" {
+  type    = string
+  default = "10.10.1.0/24"
+}
+
+variable "mgmt_priv_az2" {
+  type    = string
+  default = "10.10.2.0/24"
+}
+
+# Attach subnets for TGW in Mgmt VPC
+variable "mgmt_tgw_az1" {
+  type    = string
+  default = "10.10.10.0/24"
+}
+
+variable "mgmt_tgw_az2" {
+  type    = string
+  default = "10.10.11.0/24"
+}
+
+# App subnets
+variable "app_priv_az1" {
   type    = string
   default = "10.20.1.0/24"
 }
-variable "mgmt_cidr_az2" {
+
+variable "app_priv_az2" {
   type    = string
   default = "10.20.2.0/24"
 }
-variable "trust_cidr_az1" {
-  type    = string
-  default = "10.20.11.0/24"
-}
-variable "trust_cidr_az2" {
-  type    = string
-  default = "10.20.12.0/24"
-}
-variable "untrust_cidr_az1" {
-  type    = string
-  default = "10.20.21.0/24"
-}
-variable "untrust_cidr_az2" {
-  type    = string
-  default = "10.20.22.0/24"
-}
 
-# GWLB subnets (per AZ)
-variable "gwlb_cidr_az1" {
-  type    = string
-  default = "10.20.31.0/24"
-}
-variable "gwlb_cidr_az2" {
-  type    = string
-  default = "10.20.32.0/24"
-}
-
-# Public subnets for NAT (one per AZ)
-variable "public_cidr_az1" {
+variable "app_pub_az1" {
   type    = string
   default = "10.20.101.0/24"
 }
-variable "public_cidr_az2" {
+
+variable "app_pub_az2" {
   type    = string
   default = "10.20.102.0/24"
 }
 
-# Flag to steer trust/untrust traffic through GWLBe once Palo is ready
-variable "enable_gwlb_routing" {
+# Attach subnets for TGW in App VPC
+variable "app_tgw_az1" {
+  type    = string
+  default = "10.20.10.0/24"
+}
+
+variable "app_tgw_az2" {
+  type    = string
+  default = "10.20.11.0/24"
+}
+
+# Inspection subnets
+variable "ins_mgmt_az1" {
+  type    = string
+  default = "10.30.1.0/24"
+}
+
+variable "ins_mgmt_az2" {
+  type    = string
+  default = "10.30.2.0/24"
+}
+
+variable "ins_trust_az1" {
+  type    = string
+  default = "10.30.11.0/24"
+}
+
+variable "ins_trust_az2" {
+  type    = string
+  default = "10.30.12.0/24"
+}
+
+variable "ins_untr_az1" {
+  type    = string
+  default = "10.30.21.0/24"
+}
+
+variable "ins_untr_az2" {
+  type    = string
+  default = "10.30.22.0/24"
+}
+
+# GWLB subnets
+variable "ins_gwlb_az1" {
+  type    = string
+  default = "10.30.31.0/24"
+}
+
+variable "ins_gwlb_az2" {
+  type    = string
+  default = "10.30.32.0/24"
+}
+
+# Attach subnets for TGW in Inspection VPC (used to intercept via GWLBe)
+variable "ins_tgw_az1" {
+  type    = string
+  default = "10.30.41.0/24"
+}
+
+variable "ins_tgw_az2" {
+  type    = string
+  default = "10.30.42.0/24"
+}
+
+# Feature flags
+variable "enable_phase2_ingress_chain" {
+  description = "Future: Internet ingress chaining (NLB -> GWLB). Keep false for Phase 1."
   type        = bool
   default     = false
-  description = "If true, route trust/untrust via GWLBe. Keep false until Palo targets are registered and healthy."
 }
 
 variable "bastion_instance_type" {
@@ -102,8 +171,13 @@ variable "bastion_instance_type" {
   default = "t3.micro"
 }
 
+variable "web_instance_type" {
+  type    = string
+  default = "t3.micro"
+}
+
 ############################################
-# Provider & Tags
+# Provider & Default Tags
 ############################################
 
 provider "aws" {
@@ -119,253 +193,501 @@ provider "aws" {
   }
 }
 
+data "aws_region" "current" {}
+
 ############################################
-# VPC + IGW + Subnets (2 AZs)
+# VPCs: Mgmt, App, Inspection
 ############################################
 
-resource "aws_vpc" "this" {
-  cidr_block           = var.vpc_cidr
+# ---- Mgmt VPC ----
+resource "aws_vpc" "mgmt" {
+  cidr_block           = var.mgmt_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags = { Name = "cg-adv-vpc" }
+
+  tags = {
+    Name = "cg-adv-mgmt"
+  }
 }
 
-resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.this.id
-  tags   = { Name = "cg-adv-igw" }
+resource "aws_internet_gateway" "mgmt_igw" {
+  vpc_id = aws_vpc.mgmt.id
+
+  tags = {
+    Name = "cg-adv-mgmt-igw"
+  }
 }
 
-# Public subnets (for NAT GW)
-resource "aws_subnet" "public_az1" {
-  vpc_id                  = aws_vpc.this.id
-  cidr_block              = var.public_cidr_az1
-  availability_zone       = var.az_1
-  map_public_ip_on_launch = true
-  tags = { Name = "public-az1" }
-}
-
-resource "aws_subnet" "public_az2" {
-  vpc_id                  = aws_vpc.this.id
-  cidr_block              = var.public_cidr_az2
-  availability_zone       = var.az_2
-  map_public_ip_on_launch = true
-  tags = { Name = "public-az2" }
-}
-
-# Private subnets
-resource "aws_subnet" "mgmt_az1" {
-  vpc_id                  = aws_vpc.this.id
-  cidr_block              = var.mgmt_cidr_az1
+resource "aws_subnet" "mgmt_priv_az1" {
+  vpc_id                  = aws_vpc.mgmt.id
+  cidr_block              = var.mgmt_priv_az1
   availability_zone       = var.az_1
   map_public_ip_on_launch = false
-  tags = { Name = "mgmt-az1" }
+
+  tags = {
+    Name = "mgmt-priv-az1"
+  }
 }
 
-resource "aws_subnet" "mgmt_az2" {
-  vpc_id                  = aws_vpc.this.id
-  cidr_block              = var.mgmt_cidr_az2
+resource "aws_subnet" "mgmt_priv_az2" {
+  vpc_id                  = aws_vpc.mgmt.id
+  cidr_block              = var.mgmt_priv_az2
   availability_zone       = var.az_2
   map_public_ip_on_launch = false
-  tags = { Name = "mgmt-az2" }
+
+  tags = {
+    Name = "mgmt-priv-az2"
+  }
 }
 
-resource "aws_subnet" "trust_az1" {
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = var.trust_cidr_az1
-  availability_zone = var.az_1
-  tags = { Name = "trust-az1" }
+resource "aws_subnet" "mgmt_tgw_az1" {
+  vpc_id                  = aws_vpc.mgmt.id
+  cidr_block              = var.mgmt_tgw_az1
+  availability_zone       = var.az_1
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "mgmt-tgw-az1"
+  }
 }
 
-resource "aws_subnet" "trust_az2" {
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = var.trust_cidr_az2
-  availability_zone = var.az_2
-  tags = { Name = "trust-az2" }
+resource "aws_subnet" "mgmt_tgw_az2" {
+  vpc_id                  = aws_vpc.mgmt.id
+  cidr_block              = var.mgmt_tgw_az2
+  availability_zone       = var.az_2
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "mgmt-tgw-az2"
+  }
 }
 
-resource "aws_subnet" "untrust_az1" {
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = var.untrust_cidr_az1
-  availability_zone = var.az_1
-  tags = { Name = "untrust-az1" }
-}
-
-resource "aws_subnet" "untrust_az2" {
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = var.untrust_cidr_az2
-  availability_zone = var.az_2
-  tags = { Name = "untrust-az2" }
-}
-
-# GWLB subnets
-resource "aws_subnet" "gwlb_az1" {
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = var.gwlb_cidr_az1
-  availability_zone = var.az_1
-  tags = { Name = "gwlb-az1" }
-}
-
-resource "aws_subnet" "gwlb_az2" {
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = var.gwlb_cidr_az2
-  availability_zone = var.az_2
-  tags = { Name = "gwlb-az2" }
-}
-
-############################################
-# NAT Gateways (per AZ) + EIPs
-############################################
-
-resource "aws_eip" "nat_eip_az1" {
+resource "aws_eip" "mgmt_nat_eip_az1" {
   domain = "vpc"
-  tags   = { Name = "cg-adv-nat-eip-az1" }
+
+  tags = {
+    Name = "mgmt-nat-eip-az1"
+  }
 }
 
-resource "aws_eip" "nat_eip_az2" {
+resource "aws_eip" "mgmt_nat_eip_az2" {
   domain = "vpc"
-  tags   = { Name = "cg-adv-nat-eip-az2" }
+
+  tags = {
+    Name = "mgmt-nat-eip-az2"
+  }
 }
 
-resource "aws_nat_gateway" "nat_az1" {
-  allocation_id = aws_eip.nat_eip_az1.id
-  subnet_id     = aws_subnet.public_az1.id
-  tags          = { Name = "cg-adv-nat-az1" }
-  depends_on    = [aws_internet_gateway.igw]
+resource "aws_nat_gateway" "mgmt_nat_az1" {
+  allocation_id = aws_eip.mgmt_nat_eip_az1.id
+  subnet_id     = aws_subnet.mgmt_tgw_az1.id
+  depends_on    = [aws_internet_gateway.mgmt_igw]
+
+  tags = {
+    Name = "mgmt-nat-az1"
+  }
 }
 
-resource "aws_nat_gateway" "nat_az2" {
-  allocation_id = aws_eip.nat_eip_az2.id
-  subnet_id     = aws_subnet.public_az2.id
-  tags          = { Name = "cg-adv-nat-az2" }
-  depends_on    = [aws_internet_gateway.igw]
+resource "aws_nat_gateway" "mgmt_nat_az2" {
+  allocation_id = aws_eip.mgmt_nat_eip_az2.id
+  subnet_id     = aws_subnet.mgmt_tgw_az2.id
+  depends_on    = [aws_internet_gateway.mgmt_igw]
+
+  tags = {
+    Name = "mgmt-nat-az2"
+  }
 }
 
-############################################
-# Route Tables
-############################################
+resource "aws_route_table" "mgmt_priv_rt_az1" {
+  vpc_id = aws_vpc.mgmt.id
 
-# Public RTBs -> IGW
-resource "aws_route_table" "rtb_public_az1" {
-  vpc_id = aws_vpc.this.id
-  tags   = { Name = "rtb-public-az1" }
+  tags = {
+    Name = "rt-mgmt-priv-az1"
+  }
 }
-resource "aws_route" "public_az1_default" {
-  route_table_id         = aws_route_table.rtb_public_az1.id
+
+resource "aws_route_table" "mgmt_priv_rt_az2" {
+  vpc_id = aws_vpc.mgmt.id
+
+  tags = {
+    Name = "rt-mgmt-priv-az2"
+  }
+}
+
+resource "aws_route_table_association" "a_mgmt_priv_az1" {
+  subnet_id      = aws_subnet.mgmt_priv_az1.id
+  route_table_id = aws_route_table.mgmt_priv_rt_az1.id
+}
+
+resource "aws_route_table_association" "a_mgmt_priv_az2" {
+  subnet_id      = aws_subnet.mgmt_priv_az2.id
+  route_table_id = aws_route_table.mgmt_priv_rt_az2.id
+}
+
+resource "aws_route" "mgmt_priv_az1_egress" {
+  route_table_id         = aws_route_table.mgmt_priv_rt_az1.id
   destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.igw.id
-}
-resource "aws_route_table_association" "rta_public_az1" {
-  subnet_id      = aws_subnet.public_az1.id
-  route_table_id = aws_route_table.rtb_public_az1.id
+  nat_gateway_id         = aws_nat_gateway.mgmt_nat_az1.id
 }
 
-resource "aws_route_table" "rtb_public_az2" {
-  vpc_id = aws_vpc.this.id
-  tags   = { Name = "rtb-public-az2" }
-}
-resource "aws_route" "public_az2_default" {
-  route_table_id         = aws_route_table.rtb_public_az2.id
+resource "aws_route" "mgmt_priv_az2_egress" {
+  route_table_id         = aws_route_table.mgmt_priv_rt_az2.id
   destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.igw.id
-}
-resource "aws_route_table_association" "rta_public_az2" {
-  subnet_id      = aws_subnet.public_az2.id
-  route_table_id = aws_route_table.rtb_public_az2.id
+  nat_gateway_id         = aws_nat_gateway.mgmt_nat_az2.id
 }
 
-# Private RTBs (egress -> NAT)
-resource "aws_route_table" "rtb_mgmt_az1" {
-  vpc_id = aws_vpc.this.id
-  tags   = { Name = "rtb-mgmt-az1" }
+# ---- App VPC ----
+resource "aws_vpc" "app" {
+  cidr_block           = var.app_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "cg-adv-app"
+  }
 }
-resource "aws_route" "rt_mgmt_az1_default" {
-  route_table_id         = aws_route_table.rtb_mgmt_az1.id
+
+resource "aws_internet_gateway" "app_igw" {
+  vpc_id = aws_vpc.app.id
+
+  tags = {
+    Name = "cg-adv-app-igw"
+  }
+}
+
+resource "aws_subnet" "app_priv_az1" {
+  vpc_id                  = aws_vpc.app.id
+  cidr_block              = var.app_priv_az1
+  availability_zone       = var.az_1
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "app-priv-az1"
+  }
+}
+
+resource "aws_subnet" "app_priv_az2" {
+  vpc_id                  = aws_vpc.app.id
+  cidr_block              = var.app_priv_az2
+  availability_zone       = var.az_2
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "app-priv-az2"
+  }
+}
+
+resource "aws_subnet" "app_pub_az1" {
+  vpc_id                  = aws_vpc.app.id
+  cidr_block              = var.app_pub_az1
+  availability_zone       = var.az_1
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "app-pub-az1"
+  }
+}
+
+resource "aws_subnet" "app_pub_az2" {
+  vpc_id                  = aws_vpc.app.id
+  cidr_block              = var.app_pub_az2
+  availability_zone       = var.az_2
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "app-pub-az2"
+  }
+}
+
+resource "aws_subnet" "app_tgw_az1" {
+  vpc_id                  = aws_vpc.app.id
+  cidr_block              = var.app_tgw_az1
+  availability_zone       = var.az_1
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "app-tgw-az1"
+  }
+}
+
+resource "aws_subnet" "app_tgw_az2" {
+  vpc_id                  = aws_vpc.app.id
+  cidr_block              = var.app_tgw_az2
+  availability_zone       = var.az_2
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "app-tgw-az2"
+  }
+}
+
+resource "aws_eip" "app_nat_eip_az1" {
+  domain = "vpc"
+
+  tags = {
+    Name = "app-nat-eip-az1"
+  }
+}
+
+resource "aws_eip" "app_nat_eip_az2" {
+  domain = "vpc"
+
+  tags = {
+    Name = "app-nat-eip-az2"
+  }
+}
+
+resource "aws_nat_gateway" "app_nat_az1" {
+  allocation_id = aws_eip.app_nat_eip_az1.id
+  subnet_id     = aws_subnet.app_pub_az1.id
+  depends_on    = [aws_internet_gateway.app_igw]
+
+  tags = {
+    Name = "app-nat-az1"
+  }
+}
+
+resource "aws_nat_gateway" "app_nat_az2" {
+  allocation_id = aws_eip.app_nat_eip_az2.id
+  subnet_id     = aws_subnet.app_pub_az2.id
+  depends_on    = [aws_internet_gateway.app_igw]
+
+  tags = {
+    Name = "app-nat-az2"
+  }
+}
+
+resource "aws_route_table" "app_priv_rt_az1" {
+  vpc_id = aws_vpc.app.id
+
+  tags = {
+    Name = "rt-app-priv-az1"
+  }
+}
+
+resource "aws_route_table" "app_priv_rt_az2" {
+  vpc_id = aws_vpc.app.id
+
+  tags = {
+    Name = "rt-app-priv-az2"
+  }
+}
+
+resource "aws_route_table" "app_pub_rt_az1" {
+  vpc_id = aws_vpc.app.id
+
+  tags = {
+    Name = "rt-app-pub-az1"
+  }
+}
+
+resource "aws_route_table" "app_pub_rt_az2" {
+  vpc_id = aws_vpc.app.id
+
+  tags = {
+    Name = "rt-app-pub-az2"
+  }
+}
+
+resource "aws_route_table_association" "a_app_priv_az1" {
+  subnet_id      = aws_subnet.app_priv_az1.id
+  route_table_id = aws_route_table.app_priv_rt_az1.id
+}
+
+resource "aws_route_table_association" "a_app_priv_az2" {
+  subnet_id      = aws_subnet.app_priv_az2.id
+  route_table_id = aws_route_table.app_priv_rt_az2.id
+}
+
+resource "aws_route_table_association" "a_app_pub_az1" {
+  subnet_id      = aws_subnet.app_pub_az1.id
+  route_table_id = aws_route_table.app_pub_rt_az1.id
+}
+
+resource "aws_route_table_association" "a_app_pub_az2" {
+  subnet_id      = aws_subnet.app_pub_az2.id
+  route_table_id = aws_route_table.app_pub_rt_az2.id
+}
+
+resource "aws_route" "app_pub_az1_igw" {
+  route_table_id         = aws_route_table.app_pub_rt_az1.id
   destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.nat_az1.id
-}
-resource "aws_route_table_association" "rta_mgmt_az1" {
-  subnet_id      = aws_subnet.mgmt_az1.id
-  route_table_id = aws_route_table.rtb_mgmt_az1.id
+  gateway_id             = aws_internet_gateway.app_igw.id
 }
 
-resource "aws_route_table" "rtb_mgmt_az2" {
-  vpc_id = aws_vpc.this.id
-  tags   = { Name = "rtb-mgmt-az2" }
-}
-resource "aws_route" "rt_mgmt_az2_default" {
-  route_table_id         = aws_route_table.rtb_mgmt_az2.id
+resource "aws_route" "app_pub_az2_igw" {
+  route_table_id         = aws_route_table.app_pub_rt_az2.id
   destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.nat_az2.id
-}
-resource "aws_route_table_association" "rta_mgmt_az2" {
-  subnet_id      = aws_subnet.mgmt_az2.id
-  route_table_id = aws_route_table.rtb_mgmt_az2.id
+  gateway_id             = aws_internet_gateway.app_igw.id
 }
 
-resource "aws_route_table" "rtb_trust_az1" {
-  vpc_id = aws_vpc.this.id
-  tags   = { Name = "rtb-trust-az1" }
-}
-resource "aws_route_table_association" "rta_trust_az1" {
-  subnet_id      = aws_subnet.trust_az1.id
-  route_table_id = aws_route_table.rtb_trust_az1.id
+resource "aws_route" "app_priv_az1_nat" {
+  route_table_id         = aws_route_table.app_priv_rt_az1.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.app_nat_az1.id
 }
 
-resource "aws_route_table" "rtb_trust_az2" {
-  vpc_id = aws_vpc.this.id
-  tags   = { Name = "rtb-trust-az2" }
-}
-resource "aws_route_table_association" "rta_trust_az2" {
-  subnet_id      = aws_subnet.trust_az2.id
-  route_table_id = aws_route_table.rtb_trust_az2.id
+resource "aws_route" "app_priv_az2_nat" {
+  route_table_id         = aws_route_table.app_priv_rt_az2.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.app_nat_az2.id
 }
 
-resource "aws_route_table" "rtb_untrust_az1" {
-  vpc_id = aws_vpc.this.id
-  tags   = { Name = "rtb-untrust-az1" }
-}
-resource "aws_route_table_association" "rta_untrust_az1" {
-  subnet_id      = aws_subnet.untrust_az1.id
-  route_table_id = aws_route_table.rtb_untrust_az1.id
+# ---- Inspection VPC ----
+resource "aws_vpc" "ins" {
+  cidr_block           = var.inspection_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "cg-adv-inspection"
+  }
 }
 
-resource "aws_route_table" "rtb_untrust_az2" {
-  vpc_id = aws_vpc.this.id
-  tags   = { Name = "rtb-untrust-az2" }
-}
-resource "aws_route_table_association" "rta_untrust_az2" {
-  subnet_id      = aws_subnet.untrust_az2.id
-  route_table_id = aws_route_table.rtb_untrust_az2.id
+resource "aws_internet_gateway" "ins_igw" {
+  vpc_id = aws_vpc.ins.id
+
+  tags = {
+    Name = "cg-adv-ins-igw"
+  }
 }
 
-# GWLB RTBs (kept empty)
-resource "aws_route_table" "rtb_gwlb_az1" {
-  vpc_id = aws_vpc.this.id
-  tags   = { Name = "rtb-gwlb-az1" }
-}
-resource "aws_route_table_association" "rta_gwlb_az1" {
-  subnet_id      = aws_subnet.gwlb_az1.id
-  route_table_id = aws_route_table.rtb_gwlb_az1.id
+resource "aws_subnet" "ins_mgmt_az1" {
+  vpc_id                  = aws_vpc.ins.id
+  cidr_block              = var.ins_mgmt_az1
+  availability_zone       = var.az_1
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "ins-mgmt-az1"
+  }
 }
 
-resource "aws_route_table" "rtb_gwlb_az2" {
-  vpc_id = aws_vpc.this.id
-  tags   = { Name = "rtb-gwlb-az2" }
+resource "aws_subnet" "ins_mgmt_az2" {
+  vpc_id                  = aws_vpc.ins.id
+  cidr_block              = var.ins_mgmt_az2
+  availability_zone       = var.az_2
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "ins-mgmt-az2"
+  }
 }
-resource "aws_route_table_association" "rta_gwlb_az2" {
-  subnet_id      = aws_subnet.gwlb_az2.id
-  route_table_id = aws_route_table.rtb_gwlb_az2.id
+
+resource "aws_subnet" "ins_trust_az1" {
+  vpc_id            = aws_vpc.ins.id
+  cidr_block        = var.ins_trust_az1
+  availability_zone = var.az_1
+
+  tags = {
+    Name = "ins-trust-az1"
+  }
+}
+
+resource "aws_subnet" "ins_trust_az2" {
+  vpc_id            = aws_vpc.ins.id
+  cidr_block        = var.ins_trust_az2
+  availability_zone = var.az_2
+
+  tags = {
+    Name = "ins-trust-az2"
+  }
+}
+
+resource "aws_subnet" "ins_untr_az1" {
+  vpc_id            = aws_vpc.ins.id
+  cidr_block        = var.ins_untr_az1
+  availability_zone = var.az_1
+
+  tags = {
+    Name = "ins-untrust-az1"
+  }
+}
+
+resource "aws_subnet" "ins_untr_az2" {
+  vpc_id            = aws_vpc.ins.id
+  cidr_block        = var.ins_untr_az2
+  availability_zone = var.az_2
+
+  tags = {
+    Name = "ins-untrust-az2"
+  }
+}
+
+resource "aws_subnet" "ins_gwlb_az1" {
+  vpc_id            = aws_vpc.ins.id
+  cidr_block        = var.ins_gwlb_az1
+  availability_zone = var.az_1
+
+  tags = {
+    Name = "ins-gwlb-az1"
+  }
+}
+
+resource "aws_subnet" "ins_gwlb_az2" {
+  vpc_id            = aws_vpc.ins.id
+  cidr_block        = var.ins_gwlb_az2
+  availability_zone = var.az_2
+
+  tags = {
+    Name = "ins-gwlb-az2"
+  }
+}
+
+resource "aws_subnet" "ins_tgw_az1" {
+  vpc_id            = aws_vpc.ins.id
+  cidr_block        = var.ins_tgw_az1
+  availability_zone = var.az_1
+
+  tags = {
+    Name = "ins-tgw-az1"
+  }
+}
+
+resource "aws_subnet" "ins_tgw_az2" {
+  vpc_id            = aws_vpc.ins.id
+  cidr_block        = var.ins_tgw_az2
+  availability_zone = var.az_2
+
+  tags = {
+    Name = "ins-tgw-az2"
+  }
+}
+
+resource "aws_route_table" "ins_mgmt_rt_az1" {
+  vpc_id = aws_vpc.ins.id
+
+  tags = {
+    Name = "rt-ins-mgmt-az1"
+  }
+}
+
+resource "aws_route_table" "ins_mgmt_rt_az2" {
+  vpc_id = aws_vpc.ins.id
+
+  tags = {
+    Name = "rt-ins-mgmt-az2"
+  }
+}
+
+resource "aws_route_table_association" "a_ins_mgmt_az1" {
+  subnet_id      = aws_subnet.ins_mgmt_az1.id
+  route_table_id = aws_route_table.ins_mgmt_rt_az1.id
+}
+
+resource "aws_route_table_association" "a_ins_mgmt_az2" {
+  subnet_id      = aws_subnet.ins_mgmt_az2.id
+  route_table_id = aws_route_table.ins_mgmt_rt_az2.id
 }
 
 ############################################
 # Security Groups
 ############################################
 
-# SSM-only mgmt SG (no inbound)
-resource "aws_security_group" "mgmt_sg" {
-  name        = "adv-mgmt"
-  description = "No inbound (SSM-only)"
-  vpc_id      = aws_vpc.this.id
+resource "aws_security_group" "mgmt_default" {
+  name        = "mgmt-default"
+  description = "SSM-only outbound"
+  vpc_id      = aws_vpc.mgmt.id
 
   egress {
     from_port   = 0
@@ -373,102 +695,103 @@ resource "aws_security_group" "mgmt_sg" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  tags = { Name = "sg-mgmt" }
+
+  tags = {
+    Name = "sg-mgmt-default"
+  }
 }
 
-# VPC endpoints SG (allow 443 from VPC)
-resource "aws_security_group" "endpoints_sg" {
-  name        = "adv-vpce"
-  description = "Allow HTTPS inside VPC to Interface Endpoints"
-  vpc_id      = aws_vpc.this.id
+resource "aws_security_group" "palo_mgmt_sg" {
+  name        = "palo-mgmt"
+  description = "Bastion -> Palo mgmt HTTPS/SSH"
+  vpc_id      = aws_vpc.ins.id
 
   ingress {
-    description = "HTTPS from VPC"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
-  }
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  tags = { Name = "sg-vpce" }
-}
-
-# Default-deny for data-plane (no inbound)
-resource "aws_security_group" "default_deny" {
-  name        = "adv-default-deny"
-  description = "Deny inbound, allow outbound"
-  vpc_id      = aws_vpc.this.id
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  tags = { Name = "sg-default-deny" }
-}
-
-# Palo mgmt SG — allows bastion -> Palo mgmt (HTTPS/SSH)
-resource "aws_security_group" "fw_mgmt_sg" {
-  name        = "adv-fw-mgmt"
-  description = "Allow bastion to Palo mgmt (HTTPS/SSH)"
-  vpc_id      = aws_vpc.this.id
-
-  ingress {
-    description     = "HTTPS from bastion"
     from_port       = 443
     to_port         = 443
     protocol        = "tcp"
-    security_groups = [aws_security_group.mgmt_sg.id]
+    security_groups = [aws_security_group.mgmt_default.id]
   }
+
   ingress {
-    description     = "SSH from bastion (optional)"
     from_port       = 22
     to_port         = 22
     protocol        = "tcp"
-    security_groups = [aws_security_group.mgmt_sg.id]
+    security_groups = [aws_security_group.mgmt_default.id]
   }
+
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  tags = { Name = "fw-mgmt-sg" }
+
+  tags = {
+    Name = "sg-palo-mgmt"
+  }
 }
 
-# (Optional) FW HA SG for peer sync (self-reference)
-resource "aws_security_group" "fw_ha_sg" {
-  name        = "adv-fw-ha"
-  description = "FW-to-FW HA/control sync only"
-  vpc_id      = aws_vpc.this.id
+resource "aws_security_group" "vpce_mgmt" {
+  name   = "vpce-mgmt"
+  vpc_id = aws_vpc.mgmt.id
 
   ingress {
-    from_port = 0
-    to_port   = 0
-    protocol  = "-1"
-    self      = true
-    description = "FW peer traffic"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.mgmt_cidr]
   }
+
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  tags = { Name = "fw-ha-sg" }
+}
+
+resource "aws_security_group" "vpce_app" {
+  name   = "vpce-app"
+  vpc_id = aws_vpc.app.id
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.app_cidr]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_security_group" "vpce_ins" {
+  name   = "vpce-ins"
+  vpc_id = aws_vpc.ins.id
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.inspection_cidr]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 }
 
 ############################################
-# Interface Endpoints (SSM) in BOTH AZs
+# SSM (Interface) + S3 (Gateway) Endpoints – Mgmt/App/Inspection
 ############################################
-
-data "aws_region" "current" {}
 
 locals {
   ssm_services = [
@@ -476,42 +799,77 @@ locals {
     "com.amazonaws.${data.aws_region.current.name}.ssmmessages",
     "com.amazonaws.${data.aws_region.current.name}.ec2messages"
   ]
-
-  gwlb_subnet_ids = [
-    aws_subnet.gwlb_az1.id,
-    aws_subnet.gwlb_az2.id
-  ]
 }
 
-resource "aws_vpc_endpoint" "ssm_ifaces" {
+# Mgmt
+resource "aws_vpc_endpoint" "mgmt_ssm" {
   for_each            = toset(local.ssm_services)
-  vpc_id              = aws_vpc.this.id
+  vpc_id              = aws_vpc.mgmt.id
   service_name        = each.value
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
-  security_group_ids  = [aws_security_group.endpoints_sg.id]
-  subnet_ids          = [aws_subnet.mgmt_az1.id, aws_subnet.mgmt_az2.id]
-  tags                = { Name = "vpce-${replace(each.value, ".", "-")}" }
+  security_group_ids  = [aws_security_group.vpce_mgmt.id]
+  subnet_ids          = [aws_subnet.mgmt_priv_az1.id, aws_subnet.mgmt_priv_az2.id]
+
+  tags = {
+    Name = "mgmt-${replace(each.value, ".", "-")}"
+  }
 }
 
-# S3 Gateway endpoint for private bootstrap/artifacts (all private RTBs)
-resource "aws_vpc_endpoint" "s3_gateway" {
-  vpc_id            = aws_vpc.this.id
+resource "aws_vpc_endpoint" "mgmt_s3" {
+  vpc_id            = aws_vpc.mgmt.id
   vpc_endpoint_type = "Gateway"
   service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
-  route_table_ids   = [
-    aws_route_table.rtb_mgmt_az1.id,
-    aws_route_table.rtb_mgmt_az2.id,
-    aws_route_table.rtb_trust_az1.id,
-    aws_route_table.rtb_trust_az2.id,
-    aws_route_table.rtb_untrust_az1.id,
-    aws_route_table.rtb_untrust_az2.id
-  ]
-  tags = { Name = "vpce-s3-gateway" }
+  route_table_ids   = [aws_route_table.mgmt_priv_rt_az1.id, aws_route_table.mgmt_priv_rt_az2.id]
+
+  tags = {
+    Name = "mgmt-s3-gateway"
+  }
+}
+
+# App
+resource "aws_vpc_endpoint" "app_ssm" {
+  for_each            = toset(local.ssm_services)
+  vpc_id              = aws_vpc.app.id
+  service_name        = each.value
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  security_group_ids  = [aws_security_group.vpce_app.id]
+  subnet_ids          = [aws_subnet.app_priv_az1.id, aws_subnet.app_priv_az2.id]
+
+  tags = {
+    Name = "app-${replace(each.value, ".", "-")}"
+  }
+}
+
+resource "aws_vpc_endpoint" "app_s3" {
+  vpc_id            = aws_vpc.app.id
+  vpc_endpoint_type = "Gateway"
+  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+  route_table_ids   = [aws_route_table.app_priv_rt_az1.id, aws_route_table.app_priv_rt_az2.id]
+
+  tags = {
+    Name = "app-s3-gateway"
+  }
+}
+
+# Inspection
+resource "aws_vpc_endpoint" "ins_ssm" {
+  for_each            = toset(local.ssm_services)
+  vpc_id              = aws_vpc.ins.id
+  service_name        = each.value
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  security_group_ids  = [aws_security_group.vpce_ins.id]
+  subnet_ids          = [aws_subnet.ins_mgmt_az1.id, aws_subnet.ins_mgmt_az2.id]
+
+  tags = {
+    Name = "ins-${replace(each.value, ".", "-")}"
+  }
 }
 
 ############################################
-# SSM Bastion (No Public IP)
+# SSM Bastion (Mgmt VPC) + Demo Web (App VPC)
 ############################################
 
 data "aws_ami" "al2023" {
@@ -531,6 +889,7 @@ data "aws_iam_policy" "ssm_core" {
 data "aws_iam_policy_document" "bastion_trust" {
   statement {
     actions = ["sts:AssumeRole"]
+
     principals {
       type        = "Service"
       identifiers = ["ec2.amazonaws.com"]
@@ -556,9 +915,9 @@ resource "aws_iam_instance_profile" "bastion_profile" {
 resource "aws_instance" "ssm_bastion" {
   ami                    = data.aws_ami.al2023.id
   instance_type          = var.bastion_instance_type
-  subnet_id              = aws_subnet.mgmt_az1.id
+  subnet_id              = aws_subnet.mgmt_priv_az1.id
   iam_instance_profile   = aws_iam_instance_profile.bastion_profile.name
-  vpc_security_group_ids = [aws_security_group.mgmt_sg.id]
+  vpc_security_group_ids = [aws_security_group.mgmt_default.id]
   associate_public_ip_address = false
 
   metadata_options {
@@ -566,100 +925,180 @@ resource "aws_instance" "ssm_bastion" {
     http_tokens   = "required"
   }
 
-  tags = { Name = "cg-adv-ssm-bastion" }
-}
-
-############################################
-# VPC Flow Logs → CloudWatch (basic; can KMS in Phase-2)
-############################################
-
-resource "aws_cloudwatch_log_group" "vpc_flow" {
-  name              = "/aws/vpc/flow-logs/${aws_vpc.this.id}"
-  retention_in_days = 14
-}
-
-data "aws_iam_policy_document" "flowlog_assume" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["vpc-flow-logs.amazonaws.com"]
-    }
+  tags = {
+    Name = "cg-adv-ssm-bastion"
   }
 }
 
-resource "aws_iam_role" "flowlog_role" {
-  name               = "cg-adv-vpc-flow-logs-role"
-  assume_role_policy = data.aws_iam_policy_document.flowlog_assume.json
-}
+resource "aws_instance" "app_web" {
+  ami               = data.aws_ami.al2023.id
+  instance_type     = var.web_instance_type
+  subnet_id         = aws_subnet.app_priv_az1.id
+  vpc_security_group_ids = [aws_security_group.vpce_app.id]
 
-data "aws_iam_policy_document" "flowlog_cwl_policy" {
-  statement {
-    actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
-    resources = ["${aws_cloudwatch_log_group.vpc_flow.arn}:*"]
+  user_data = <<-EOT
+              #!/bin/bash
+              dnf -y install nginx
+              systemctl enable --now nginx
+              echo "<h1>Acme Demo NGINX</h1>" > /usr/share/nginx/html/index.html
+              EOT
+
+  tags = {
+    Name = "cg-adv-web"
   }
 }
 
-resource "aws_iam_role_policy" "flowlog_inline" {
-  name   = "cg-adv-vpc-flow-logs-to-cwl"
-  role   = aws_iam_role.flowlog_role.id
-  policy = data.aws_iam_policy_document.flowlog_cwl_policy.json
+############################################
+# Transit Gateway (TGW) – Centralized Routing
+############################################
+
+resource "aws_ec2_transit_gateway" "tgw" {
+  description                     = "cg-adv-tgw"
+  default_route_table_association = "disable"
+  default_route_table_propagation = "disable"
+  vpn_ecmp_support                = "enable"
+  dns_support                     = "enable"
+  multicast_support               = "disable"
+
+  tags = {
+    Name = "cg-adv-tgw"
+  }
 }
 
-resource "aws_flow_log" "vpc" {
-  vpc_id               = aws_vpc.this.id
-  traffic_type         = "ALL"
-  log_destination      = aws_cloudwatch_log_group.vpc_flow.arn
-  log_destination_type = "cloud-watch-logs"
-  iam_role_arn         = aws_iam_role.flowlog_role.arn
-  tags                 = { Name = "cg-adv-vpc-flow-logs" }
+resource "aws_ec2_transit_gateway_route_table" "spoke_rt" {
+  transit_gateway_id = aws_ec2_transit_gateway.tgw.id
+
+  tags = {
+    Name = "tgw-spoke-rt"
+  }
+}
+
+resource "aws_ec2_transit_gateway_route_table" "inspect_rt" {
+  transit_gateway_id = aws_ec2_transit_gateway.tgw.id
+
+  tags = {
+    Name = "tgw-inspect-rt"
+  }
+}
+
+resource "aws_ec2_transit_gateway_vpc_attachment" "att_mgmt" {
+  subnet_ids                = [aws_subnet.mgmt_tgw_az1.id, aws_subnet.mgmt_tgw_az2.id]
+  transit_gateway_id        = aws_ec2_transit_gateway.tgw.id
+  vpc_id                    = aws_vpc.mgmt.id
+  appliance_mode_support    = "disable"
+  dns_support               = "enable"
+  ipv6_support              = "disable"
+
+  tags = {
+    Name = "att-mgmt"
+  }
+}
+
+resource "aws_ec2_transit_gateway_vpc_attachment" "att_app" {
+  subnet_ids                = [aws_subnet.app_tgw_az1.id, aws_subnet.app_tgw_az2.id]
+  transit_gateway_id        = aws_ec2_transit_gateway.tgw.id
+  vpc_id                    = aws_vpc.app.id
+  appliance_mode_support    = "disable"
+  dns_support               = "enable"
+  ipv6_support              = "disable"
+
+  tags = {
+    Name = "att-app"
+  }
+}
+
+resource "aws_ec2_transit_gateway_vpc_attachment" "att_ins" {
+  subnet_ids                = [aws_subnet.ins_tgw_az1.id, aws_subnet.ins_tgw_az2.id]
+  transit_gateway_id        = aws_ec2_transit_gateway.tgw.id
+  vpc_id                    = aws_vpc.ins.id
+  appliance_mode_support    = "enable" # REQUIRED for inspection VPC
+  dns_support               = "enable"
+  ipv6_support              = "disable"
+
+  tags = {
+    Name = "att-inspection"
+  }
+}
+
+resource "aws_ec2_transit_gateway_route_table_association" "assoc_mgmt" {
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_mgmt.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.spoke_rt.id
+}
+
+resource "aws_ec2_transit_gateway_route_table_association" "assoc_app" {
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_app.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.spoke_rt.id
+}
+
+resource "aws_ec2_transit_gateway_route_table_association" "assoc_inspect" {
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_ins.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.inspect_rt.id
+}
+
+resource "aws_ec2_transit_gateway_route" "spoke_default_to_inspect" {
+  destination_cidr_block         = "0.0.0.0/0"
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_ins.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.spoke_rt.id
+}
+
+resource "aws_ec2_transit_gateway_route" "inspect_to_mgmt" {
+  destination_cidr_block         = var.mgmt_cidr
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_mgmt.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.inspect_rt.id
+}
+
+resource "aws_ec2_transit_gateway_route" "inspect_to_app" {
+  destination_cidr_block         = var.app_cidr
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_app.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.inspect_rt.id
 }
 
 ############################################
-# GWLB (2 AZs) + TG + Listener
+# GWLB in Inspection VPC + Endpoint Service
 ############################################
 
 resource "aws_lb" "gwlb" {
   name               = "cg-adv-gwlb"
   load_balancer_type = "gateway"
 
-  dynamic "subnet_mapping" {
-    for_each = toset(local.gwlb_subnet_ids)
-    content {
-      subnet_id = subnet_mapping.value
-    }
+  subnet_mapping {
+    subnet_id = aws_subnet.ins_gwlb_az1.id
   }
 
-  tags = { Name = "cg-adv-gwlb" }
+  subnet_mapping {
+    subnet_id = aws_subnet.ins_gwlb_az2.id
+  }
+
+  tags = {
+    Name = "cg-adv-gwlb"
+  }
 }
 
 resource "aws_lb_target_group" "gwlb_tg" {
   name        = "cg-adv-gwlb-tg"
   port        = 6081
   protocol    = "GENEVE"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = aws_vpc.ins.id
   target_type = "ip"
 
-  # Adjust when PAN dataplane health-check port is chosen (e.g., TCP 443)
   health_check {
     protocol = "TCP"
     port     = "80"
   }
 
-  tags = { Name = "cg-adv-gwlb-tg" }
+  tags = {
+    Name = "cg-adv-gwlb-tg"
+  }
 }
 
 resource "aws_lb_listener" "gwlb_listener" {
   load_balancer_arn = aws_lb.gwlb.arn
+
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.gwlb_tg.arn
   }
 }
-
-############################################
-# GWLB → VPC Endpoint Service (required for GWLBe)
-############################################
 
 resource "aws_vpc_endpoint_service" "gwlb_svc" {
   acceptance_required        = false
@@ -670,108 +1109,142 @@ resource "aws_vpc_endpoint_service" "gwlb_svc" {
   }
 }
 
-############################################
-# GWLB Endpoints (GWLBe) in trust/untrust (both AZs)
-# Routing to these endpoints is gated by enable_gwlb_routing (default false)
-############################################
-
-resource "aws_vpc_endpoint" "gwlbe_trust_az1" {
-  vpc_id            = aws_vpc.this.id
+resource "aws_vpc_endpoint" "ins_gwlbe_az1" {
+  vpc_id            = aws_vpc.ins.id
   vpc_endpoint_type = "GatewayLoadBalancer"
   service_name      = aws_vpc_endpoint_service.gwlb_svc.service_name
-  subnet_ids        = [aws_subnet.trust_az1.id]
-  tags              = { Name = "gwlbe-trust-az1" }
+  subnet_ids        = [aws_subnet.ins_tgw_az1.id]
   depends_on        = [aws_vpc_endpoint_service.gwlb_svc]
+
+  tags = {
+    Name = "ins-gwlbe-az1"
+  }
 }
 
-resource "aws_vpc_endpoint" "gwlbe_trust_az2" {
-  vpc_id            = aws_vpc.this.id
+resource "aws_vpc_endpoint" "ins_gwlbe_az2" {
+  vpc_id            = aws_vpc.ins.id
   vpc_endpoint_type = "GatewayLoadBalancer"
   service_name      = aws_vpc_endpoint_service.gwlb_svc.service_name
-  subnet_ids        = [aws_subnet.trust_az2.id]
-  tags              = { Name = "gwlbe-trust-az2" }
+  subnet_ids        = [aws_subnet.ins_tgw_az2.id]
   depends_on        = [aws_vpc_endpoint_service.gwlb_svc]
+
+  tags = {
+    Name = "ins-gwlbe-az2"
+  }
 }
 
-resource "aws_vpc_endpoint" "gwlbe_untrust_az1" {
-  vpc_id            = aws_vpc.this.id
-  vpc_endpoint_type = "GatewayLoadBalancer"
-  service_name      = aws_vpc_endpoint_service.gwlb_svc.service_name
-  subnet_ids        = [aws_subnet.untrust_az1.id]
-  tags              = { Name = "gwlbe-untrust-az1" }
-  depends_on        = [aws_vpc_endpoint_service.gwlb_svc]
+resource "aws_route_table" "ins_tgw_rt_az1" {
+  vpc_id = aws_vpc.ins.id
+
+  tags = {
+    Name = "rt-ins-tgw-az1"
+  }
 }
 
-resource "aws_vpc_endpoint" "gwlbe_untrust_az2" {
-  vpc_id            = aws_vpc.this.id
-  vpc_endpoint_type = "GatewayLoadBalancer"
-  service_name      = aws_vpc_endpoint_service.gwlb_svc.service_name
-  subnet_ids        = [aws_subnet.untrust_az2.id]
-  tags              = { Name = "gwlbe-untrust-az2" }
-  depends_on        = [aws_vpc_endpoint_service.gwlb_svc]
+resource "aws_route_table" "ins_tgw_rt_az2" {
+  vpc_id = aws_vpc.ins.id
+
+  tags = {
+    Name = "rt-ins-tgw-az2"
+  }
 }
 
-# Conditionally steer trust/untrust via GWLBe (SAFE: off by default)
-resource "aws_route" "rt_trust_az1_gwlbe" {
-  count                  = var.enable_gwlb_routing ? 1 : 0
-  route_table_id         = aws_route_table.rtb_trust_az1.id
+resource "aws_route_table_association" "a_ins_tgw_az1" {
+  subnet_id      = aws_subnet.ins_tgw_az1.id
+  route_table_id = aws_route_table.ins_tgw_rt_az1.id
+}
+
+resource "aws_route_table_association" "a_ins_tgw_az2" {
+  subnet_id      = aws_subnet.ins_tgw_az2.id
+  route_table_id = aws_route_table.ins_tgw_rt_az2.id
+}
+
+resource "aws_route" "ins_tgw_az1_to_gwlbe" {
+  route_table_id         = aws_route_table.ins_tgw_rt_az1.id
   destination_cidr_block = "0.0.0.0/0"
-  vpc_endpoint_id        = aws_vpc_endpoint.gwlbe_trust_az1.id
+  vpc_endpoint_id        = aws_vpc_endpoint.ins_gwlbe_az1.id
 }
 
-resource "aws_route" "rt_trust_az2_gwlbe" {
-  count                  = var.enable_gwlb_routing ? 1 : 0
-  route_table_id         = aws_route_table.rtb_trust_az2.id
+resource "aws_route" "ins_tgw_az2_to_gwlbe" {
+  route_table_id         = aws_route_table.ins_tgw_rt_az2.id
   destination_cidr_block = "0.0.0.0/0"
-  vpc_endpoint_id        = aws_vpc_endpoint.gwlbe_trust_az2.id
-}
-
-resource "aws_route" "rt_untrust_az1_gwlbe" {
-  count                  = var.enable_gwlb_routing ? 1 : 0
-  route_table_id         = aws_route_table.rtb_untrust_az1.id
-  destination_cidr_block = "0.0.0.0/0"
-  vpc_endpoint_id        = aws_vpc_endpoint.gwlbe_untrust_az1.id
-}
-
-resource "aws_route" "rt_untrust_az2_gwlbe" {
-  count                  = var.enable_gwlb_routing ? 1 : 0
-  route_table_id         = aws_route_table.rtb_untrust_az2.id
-  destination_cidr_block = "0.0.0.0/0"
-  vpc_endpoint_id        = aws_vpc_endpoint.gwlbe_untrust_az2.id
+  vpc_endpoint_id        = aws_vpc_endpoint.ins_gwlbe_az2.id
 }
 
 ############################################
-# Outputs (handy for next steps)
+# Register Palo dataplane IPs (manual step)
+############################################
+# Example (uncomment and fill when ready):
+# resource "aws_lb_target_group_attachment" "pan_az1" {
+#   target_group_arn = aws_lb_target_group.gwlb_tg.arn
+#   target_id        = "10.30.11.10" # Palo trust ENI AZ1
+# }
+# resource "aws_lb_target_group_attachment" "pan_az2" {
+#   target_group_arn = aws_lb_target_group.gwlb_tg.arn
+#   target_id        = "10.30.12.10" # Palo trust ENI AZ2
+# }
+
+############################################
+# Outputs
 ############################################
 
-output "ssm_bastion_instance_id" {
-  value = aws_instance.ssm_bastion.id
+output "tgw_id" {
+  value = aws_ec2_transit_gateway.tgw.id
 }
 
-output "gwlb_arn" {
+output "tgw_spoke_rt_id" {
+  value = aws_ec2_transit_gateway_route_table.spoke_rt.id
+}
+
+output "tgw_inspect_rt_id" {
+  value = aws_ec2_transit_gateway_route_table.inspect_rt.id
+}
+
+output "att_mgmt_id" {
+  value = aws_ec2_transit_gateway_vpc_attachment.att_mgmt.id
+}
+
+output "att_app_id" {
+  value = aws_ec2_transit_gateway_vpc_attachment.att_app.id
+}
+
+output "att_inspection_id" {
+  value = aws_ec2_transit_gateway_vpc_attachment.att_ins.id
+}
+
+output "inspection_gwlb_arn" {
   value = aws_lb.gwlb.arn
 }
 
-output "gwlb_target_group_arn" {
+output "inspection_gwlb_tg_arn" {
   value = aws_lb_target_group.gwlb_tg.arn
 }
 
-output "fw_mgmt_sg_id" {
-  value = aws_security_group.fw_mgmt_sg.id
+output "inspection_gwlbe_ids" {
+  value = [
+    aws_vpc_endpoint.ins_gwlbe_az1.id,
+    aws_vpc_endpoint.ins_gwlbe_az2.id
+  ]
 }
 
-output "subnets_mgmt" {
-  value = [aws_subnet.mgmt_az1.id, aws_subnet.mgmt_az2.id]
+output "mgmt_bastion_instance_id" {
+  value = aws_instance.ssm_bastion.id
 }
 
-output "subnets_trust" {
-  value = [aws_subnet.trust_az1.id, aws_subnet.trust_az2.id]
+output "app_web_instance_id" {
+  value = aws_instance.app_web.id
 }
 
-output "subnets_untrust" {
-  value = [aws_subnet.untrust_az1.id, aws_subnet.untrust_az2.id]
+output "palo_mgmt_sg_id" {
+  value = aws_security_group.palo_mgmt_sg.id
 }
 
-output "subnets_gwlb" {
-  value = [aws_subnet.gwlb_az1.id, aws_subnet.gwlb_az2.id]
+output "inspection_subnets" {
+  value = {
+    mgmt   = [aws_subnet.ins_mgmt_az1.id, aws_subnet.ins_mgmt_az2.id]
+    trust  = [aws_subnet.ins_trust_az1.id, aws_subnet.ins_trust_az2.id]
+    untrust = [aws_subnet.ins_untr_az1.id, aws_subnet.ins_untr_az2.id]
+    gwlb   = [aws_subnet.ins_gwlb_az1.id, aws_subnet.ins_gwlb_az2.id]
+    tgw    = [aws_subnet.ins_tgw_az1.id, aws_subnet.ins_tgw_az2.id]
+  }
 }
