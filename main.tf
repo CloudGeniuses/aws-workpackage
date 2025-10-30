@@ -46,7 +46,7 @@ variable "azs" {
   type        = list(string)
   default     = [
     "a",
-    "b"
+    "b",
   ]
 }
 
@@ -73,8 +73,7 @@ variable "inspection_vpc_cidr" {
 ########################################
 
 locals {
-  # Bastion subnet = management_private (10.10.2.0/24)
-  mgmt_private_cidr = "10.10.2.0/24"
+  mgmt_private_cidr = "10.10.2.0/24"  # bastion subnet
 }
 
 ########################################
@@ -332,7 +331,7 @@ resource "aws_route_table_association" "inspection_public_assoc" {
   route_table_id = aws_route_table.inspection_public.id
 }
 
-# -------- PRIVATE RTs (NAT egress) --------
+# -------- PRIVATE RTs (NAT egress + TGW East/West) --------
 
 resource "aws_route_table" "management_private" {
   vpc_id = aws_vpc.management.id
@@ -346,6 +345,20 @@ resource "aws_route" "management_private_default" {
   route_table_id         = aws_route_table.management_private.id
   destination_cidr_block = "0.0.0.0/0"
   nat_gateway_id         = aws_nat_gateway.management.id
+}
+
+# NEW: Management -> App via TGW
+resource "aws_route" "management_to_app_via_tgw" {
+  route_table_id         = aws_route_table.management_private.id
+  destination_cidr_block = var.app_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
+}
+
+# NEW: Management -> Inspection via TGW
+resource "aws_route" "management_to_inspection_via_tgw" {
+  route_table_id         = aws_route_table.management_private.id
+  destination_cidr_block = var.inspection_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
 }
 
 resource "aws_route_table_association" "management_private_assoc" {
@@ -367,6 +380,20 @@ resource "aws_route" "app_private_default" {
   nat_gateway_id         = aws_nat_gateway.app.id
 }
 
+# NEW: App -> Management via TGW
+resource "aws_route" "app_to_management_via_tgw" {
+  route_table_id         = aws_route_table.app_private.id
+  destination_cidr_block = var.management_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
+}
+
+# NEW: App -> Inspection via TGW
+resource "aws_route" "app_to_inspection_via_tgw" {
+  route_table_id         = aws_route_table.app_private.id
+  destination_cidr_block = var.inspection_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
+}
+
 resource "aws_route_table_association" "app_private_assoc" {
   subnet_id      = aws_subnet.app_private.id
   route_table_id = aws_route_table.app_private.id
@@ -386,8 +413,28 @@ resource "aws_route" "inspection_private_default" {
   nat_gateway_id         = aws_nat_gateway.inspection.id
 }
 
+# NEW: Inspection -> Management via TGW
+resource "aws_route" "inspection_to_management_via_tgw" {
+  route_table_id         = aws_route_table.inspection_private.id
+  destination_cidr_block = var.management_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
+}
+
+# NEW: Inspection -> App via TGW
+resource "aws_route" "inspection_to_app_via_tgw" {
+  route_table_id         = aws_route_table.inspection_private.id
+  destination_cidr_block = var.app_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
+}
+
 resource "aws_route_table_association" "inspection_private_assoc" {
   subnet_id      = aws_subnet.inspection_private.id
+  route_table_id = aws_route_table.inspection_private.id
+}
+
+# NEW: Associate Palo mgmt subnet to the same private RT (gets NAT + TGW routes)
+resource "aws_route_table_association" "inspection_mgmt_assoc" {
+  subnet_id      = aws_subnet.inspection_mgmt.id
   route_table_id = aws_route_table.inspection_private.id
 }
 
@@ -479,7 +526,7 @@ resource "aws_iam_role" "ssm_role" {
           Service = "ec2.amazonaws.com"
         }
         Action = "sts:AssumeRole"
-      }
+      },
     ]
   })
 }
@@ -544,7 +591,7 @@ resource "aws_security_group" "palo_mgmt_sg" {
   description = "Security group for Palo Alto management interface"
   vpc_id      = aws_vpc.inspection.id
 
-  # Broad intra-Inspection-VPC allowance (your original)
+  # Keep broad intra-Inspection-VPC allowance
   ingress {
     description = "Allow HTTPS (GUI) from Inspection VPC only"
     from_port   = 443
@@ -574,7 +621,7 @@ resource "aws_security_group" "palo_mgmt_sg" {
   }
 }
 
-# Narrow rules to ensure SSM port-forward from bastion subnet works
+# Also explicitly allow from bastion subnet (SSM port-forward path)
 resource "aws_security_group_rule" "palo_gui_from_mgmt_private" {
   type              = "ingress"
   security_group_id = aws_security_group.palo_mgmt_sg.id
@@ -600,11 +647,11 @@ resource "aws_security_group_rule" "palo_ssh_from_mgmt_private" {
 ########################################
 
 resource "aws_instance" "bastion" {
-  ami                  = "ami-0c5204531f799e0c6"
-  instance_type        = "t3.micro"
-  subnet_id            = aws_subnet.management_private.id
-  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
-  security_groups      = [aws_security_group.management_sg.id]
+  ami                   = "ami-0c5204531f799e0c6"
+  instance_type         = "t3.micro"
+  subnet_id             = aws_subnet.management_private.id
+  iam_instance_profile  = aws_iam_instance_profile.ssm_profile.name
+  security_groups       = [aws_security_group.management_sg.id]
 
   tags = {
     Name = "Management-Bastion"
@@ -612,11 +659,11 @@ resource "aws_instance" "bastion" {
 }
 
 resource "aws_instance" "nginx" {
-  ami                  = "ami-0c5204531f799e0c6"
-  instance_type        = "t3.micro"
-  subnet_id            = aws_subnet.app_private.id
-  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
-  security_groups      = [aws_security_group.app_sg.id]
+  ami                   = "ami-0c5204531f799e0c6"
+  instance_type         = "t3.micro"
+  subnet_id             = aws_subnet.app_private.id
+  iam_instance_profile  = aws_iam_instance_profile.ssm_profile.name
+  security_groups       = [aws_security_group.app_sg.id]
 
   tags = {
     Name = "App-NGINX"
@@ -636,7 +683,7 @@ resource "aws_instance" "nginx" {
 ########################################
 
 # Manually deploy Palo Alto in Inspection VPC with three ENIs:
-#  - eth0 (mgmt)  -> subnet: aws_subnet.inspection_mgmt.id  + SG: aws_security_group.palo_mgmt_sg.id
-#  - eth1 (untrust) -> subnet: aws_subnet.inspection_public.id (assign EIP)
+#  - eth0 (mgmt)    -> subnet: aws_subnet.inspection_mgmt.id   + SG: aws_security_group.palo_mgmt_sg.id
+#  - eth1 (untrust) -> subnet: aws_subnet.inspection_public.id  (assign EIP)
 #  - eth2 (trust)   -> subnet: aws_subnet.inspection_private.id
 # Then steer TGW routes through the firewall for egress / East-West.
