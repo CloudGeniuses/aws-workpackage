@@ -38,11 +38,11 @@ variable "aws_region" {
 variable "key_pair" {
   description = "Key pair name (for optional manual SSH)"
   type        = string
-  default     = "YOUR_KEY_PAIR"
+  default     = "palo-nva-fw-01"
 }
 
 variable "azs" {
-  description = "Availability zones letters"
+  description = "Availability zones list"
   type        = list(string)
   default     = [
     "a",
@@ -73,9 +73,7 @@ variable "inspection_vpc_cidr" {
 ########################################
 
 locals {
-  az0                  = "${var.aws_region}${var.azs[0]}"
-  az1                  = "${var.aws_region}${var.azs[1]}"
-  mgmt_private_cidr    = "10.10.2.0/24"
+  mgmt_private_cidr = "10.10.2.0/24"  # bastion subnet
 }
 
 ########################################
@@ -120,7 +118,7 @@ resource "aws_subnet" "management_public" {
   vpc_id                  = aws_vpc.management.id
   cidr_block              = "10.10.1.0/24"
   map_public_ip_on_launch = true
-  availability_zone       = local.az0
+  availability_zone       = "${var.aws_region}${var.azs[0]}"
 
   tags = {
     Name = "management-public"
@@ -129,8 +127,8 @@ resource "aws_subnet" "management_public" {
 
 resource "aws_subnet" "management_private" {
   vpc_id            = aws_vpc.management.id
-  cidr_block        = local.mgmt_private_cidr
-  availability_zone = local.az1
+  cidr_block        = "10.10.2.0/24"
+  availability_zone = "${var.aws_region}${var.azs[1]}"
 
   tags = {
     Name = "management-private"
@@ -141,7 +139,7 @@ resource "aws_subnet" "app_public" {
   vpc_id                  = aws_vpc.app.id
   cidr_block              = "10.20.1.0/24"
   map_public_ip_on_launch = true
-  availability_zone       = local.az0
+  availability_zone       = "${var.aws_region}${var.azs[0]}"
 
   tags = {
     Name = "app-public"
@@ -151,7 +149,7 @@ resource "aws_subnet" "app_public" {
 resource "aws_subnet" "app_private" {
   vpc_id            = aws_vpc.app.id
   cidr_block        = "10.20.2.0/24"
-  availability_zone = local.az1
+  availability_zone = "${var.aws_region}${var.azs[1]}"
 
   tags = {
     Name = "app-private"
@@ -162,7 +160,7 @@ resource "aws_subnet" "inspection_public" {
   vpc_id                  = aws_vpc.inspection.id
   cidr_block              = "10.30.1.0/24"
   map_public_ip_on_launch = true
-  availability_zone       = local.az0
+  availability_zone       = "${var.aws_region}${var.azs[0]}"
 
   tags = {
     Name = "inspection-public"
@@ -172,7 +170,7 @@ resource "aws_subnet" "inspection_public" {
 resource "aws_subnet" "inspection_private" {
   vpc_id            = aws_vpc.inspection.id
   cidr_block        = "10.30.2.0/24"
-  availability_zone = local.az1
+  availability_zone = "${var.aws_region}${var.azs[1]}"
 
   tags = {
     Name = "inspection-private"
@@ -183,7 +181,7 @@ resource "aws_subnet" "inspection_private" {
 resource "aws_subnet" "inspection_mgmt" {
   vpc_id                  = aws_vpc.inspection.id
   cidr_block              = "10.30.10.0/24"
-  availability_zone       = local.az0
+  availability_zone       = "${var.aws_region}${var.azs[0]}"
   map_public_ip_on_launch = false
 
   tags = {
@@ -349,6 +347,20 @@ resource "aws_route" "management_private_default" {
   nat_gateway_id         = aws_nat_gateway.management.id
 }
 
+# Management -> App via TGW
+resource "aws_route" "management_to_app_via_tgw" {
+  route_table_id         = aws_route_table.management_private.id
+  destination_cidr_block = var.app_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
+}
+
+# Management -> Inspection via TGW
+resource "aws_route" "management_to_inspection_via_tgw" {
+  route_table_id         = aws_route_table.management_private.id
+  destination_cidr_block = var.inspection_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
+}
+
 resource "aws_route_table_association" "management_private_assoc" {
   subnet_id      = aws_subnet.management_private.id
   route_table_id = aws_route_table.management_private.id
@@ -366,6 +378,20 @@ resource "aws_route" "app_private_default" {
   route_table_id         = aws_route_table.app_private.id
   destination_cidr_block = "0.0.0.0/0"
   nat_gateway_id         = aws_nat_gateway.app.id
+}
+
+# App -> Management via TGW
+resource "aws_route" "app_to_management_via_tgw" {
+  route_table_id         = aws_route_table.app_private.id
+  destination_cidr_block = var.management_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
+}
+
+# App -> Inspection via TGW
+resource "aws_route" "app_to_inspection_via_tgw" {
+  route_table_id         = aws_route_table.app_private.id
+  destination_cidr_block = var.inspection_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
 }
 
 resource "aws_route_table_association" "app_private_assoc" {
@@ -387,36 +413,45 @@ resource "aws_route" "inspection_private_default" {
   nat_gateway_id         = aws_nat_gateway.inspection.id
 }
 
+# Inspection -> Management via TGW
+resource "aws_route" "inspection_to_management_via_tgw" {
+  route_table_id         = aws_route_table.inspection_private.id
+  destination_cidr_block = var.management_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
+}
+
+# Inspection -> App via TGW
+resource "aws_route" "inspection_to_app_via_tgw" {
+  route_table_id         = aws_route_table.inspection_private.id
+  destination_cidr_block = var.app_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
+}
+
 resource "aws_route_table_association" "inspection_private_assoc" {
   subnet_id      = aws_subnet.inspection_private.id
   route_table_id = aws_route_table.inspection_private.id
 }
 
-# Palo mgmt subnet uses private RT (inherits NAT + TGW routes)
+# Associate Palo mgmt subnet to the private RT (gets NAT + TGW routes)
 resource "aws_route_table_association" "inspection_mgmt_assoc" {
   subnet_id      = aws_subnet.inspection_mgmt.id
   route_table_id = aws_route_table.inspection_private.id
 }
 
 ########################################
-# TRANSIT GATEWAY  (single default RT)
+# TRANSIT GATEWAY
 ########################################
 
 resource "aws_ec2_transit_gateway" "tgw" {
-  description                     = "Central TGW for inter-VPC routing"
-  default_route_table_association = "enable"
-  default_route_table_propagation = "enable"
+  description = "Central TGW for inter-VPC routing"
 
   tags = {
     Name = "Main-TGW"
   }
 }
 
-# VPC attachments (private subnets)
 resource "aws_ec2_transit_gateway_vpc_attachment" "management_attach" {
-  subnet_ids         = [
-    aws_subnet.management_private.id,
-  ]
+  subnet_ids         = [aws_subnet.management_private.id]
   transit_gateway_id = aws_ec2_transit_gateway.tgw.id
   vpc_id             = aws_vpc.management.id
 
@@ -426,9 +461,7 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "management_attach" {
 }
 
 resource "aws_ec2_transit_gateway_vpc_attachment" "app_attach" {
-  subnet_ids         = [
-    aws_subnet.app_private.id,
-  ]
+  subnet_ids         = [aws_subnet.app_private.id]
   transit_gateway_id = aws_ec2_transit_gateway.tgw.id
   vpc_id             = aws_vpc.app.id
 
@@ -438,9 +471,7 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "app_attach" {
 }
 
 resource "aws_ec2_transit_gateway_vpc_attachment" "inspection_attach" {
-  subnet_ids         = [
-    aws_subnet.inspection_private.id,
-  ]
+  subnet_ids         = [aws_subnet.inspection_private.id]
   transit_gateway_id = aws_ec2_transit_gateway.tgw.id
   vpc_id             = aws_vpc.inspection.id
 
@@ -449,66 +480,33 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "inspection_attach" {
   }
 }
 
-# Use the TGW's default association RT for all routes
-# (no explicit association resources -> avoids AlreadyAssociated errors)
-locals {
-  tgw_default_rt_id = aws_ec2_transit_gateway.tgw.association_default_route_table_id
+resource "aws_ec2_transit_gateway_route_table" "main" {
+  transit_gateway_id = aws_ec2_transit_gateway.tgw.id
+
+  tags = {
+    Name = "TGW-Main-Route-Table"
+  }
 }
 
-# Add CIDR routes into the TGW default RT pointing to the right attachments
-resource "aws_ec2_transit_gateway_route" "tgw_rt_to_management" {
+# NOTE: We let default association/propg rules apply; avoid double-associations
+# and the AlreadyAssociated errors seen earlier.
+
+resource "aws_ec2_transit_gateway_route" "route_to_management" {
   destination_cidr_block         = var.management_vpc_cidr
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.management_attach.id
-  transit_gateway_route_table_id = local.tgw_default_rt_id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.main.id
 }
 
-resource "aws_ec2_transit_gateway_route" "tgw_rt_to_app" {
+resource "aws_ec2_transit_gateway_route" "route_to_app" {
   destination_cidr_block         = var.app_vpc_cidr
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.app_attach.id
-  transit_gateway_route_table_id = local.tgw_default_rt_id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.main.id
 }
 
-resource "aws_ec2_transit_gateway_route" "tgw_rt_to_inspection" {
+resource "aws_ec2_transit_gateway_route" "route_to_inspection" {
   destination_cidr_block         = var.inspection_vpc_cidr
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.inspection_attach.id
-  transit_gateway_route_table_id = local.tgw_default_rt_id
-}
-
-# Add VPC RT entries for East/West over TGW
-resource "aws_route" "management_to_app_via_tgw" {
-  route_table_id         = aws_route_table.management_private.id
-  destination_cidr_block = var.app_vpc_cidr
-  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
-}
-
-resource "aws_route" "management_to_inspection_via_tgw" {
-  route_table_id         = aws_route_table.management_private.id
-  destination_cidr_block = var.inspection_vpc_cidr
-  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
-}
-
-resource "aws_route" "app_to_management_via_tgw" {
-  route_table_id         = aws_route_table.app_private.id
-  destination_cidr_block = var.management_vpc_cidr
-  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
-}
-
-resource "aws_route" "app_to_inspection_via_tgw" {
-  route_table_id         = aws_route_table.app_private.id
-  destination_cidr_block = var.inspection_vpc_cidr
-  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
-}
-
-resource "aws_route" "inspection_to_management_via_tgw" {
-  route_table_id         = aws_route_table.inspection_private.id
-  destination_cidr_block = var.management_vpc_cidr
-  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
-}
-
-resource "aws_route" "inspection_to_app_via_tgw" {
-  route_table_id         = aws_route_table.inspection_private.id
-  destination_cidr_block = var.app_vpc_cidr
-  transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.main.id
 }
 
 ########################################
@@ -559,9 +557,7 @@ resource "aws_security_group" "management_sg" {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = [
-      "0.0.0.0/0",
-    ]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
@@ -574,55 +570,44 @@ resource "aws_security_group" "app_sg" {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = [
-      aws_vpc.inspection.cidr_block,
-    ]
+    cidr_blocks = [aws_vpc.inspection.cidr_block]
   }
 
   ingress {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = [
-      aws_vpc.inspection.cidr_block,
-    ]
+    cidr_blocks = [aws_vpc.inspection.cidr_block]
   }
 
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = [
-      "0.0.0.0/0",
-    ]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
-# Palo Alto Management SG (eth0 in inspection-mgmt subnet)
+# Palo Alto Management SG (for mgmt eth0 in inspection-mgmt subnet)
 resource "aws_security_group" "palo_mgmt_sg" {
   name        = "palo-mgmt-sg"
   description = "Security group for Palo Alto management interface"
   vpc_id      = aws_vpc.inspection.id
 
-  # Broad intra-Inspection-VPC allowance (optional; kept)
   ingress {
-    description = "Allow HTTPS (GUI) from Inspection VPC"
+    description = "Allow HTTPS (GUI) from bastion subnet"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = [
-      var.inspection_vpc_cidr,
-    ]
+    cidr_blocks = [local.mgmt_private_cidr]
   }
 
   ingress {
-    description = "Allow SSH from Inspection VPC"
+    description = "Allow SSH from bastion subnet"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [
-      var.inspection_vpc_cidr,
-    ]
+    cidr_blocks = [local.mgmt_private_cidr]
   }
 
   egress {
@@ -630,56 +615,11 @@ resource "aws_security_group" "palo_mgmt_sg" {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = [
-      "0.0.0.0/0",
-    ]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   tags = {
     Name = "palo-mgmt-sg"
-  }
-}
-
-# Narrow, explicit allowances from the bastion subnet (SSM port-forward path)
-resource "aws_security_group_rule" "palo_gui_from_mgmt_private" {
-  type              = "ingress"
-  security_group_id = aws_security_group.palo_mgmt_sg.id
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  cidr_blocks       = [
-    local.mgmt_private_cidr,
-  ]
-  description       = "Allow HTTPS from management-private (bastion) for SSM port-forward"
-}
-
-resource "aws_security_group_rule" "palo_ssh_from_mgmt_private" {
-  type              = "ingress"
-  security_group_id = aws_security_group.palo_mgmt_sg.id
-  from_port         = 22
-  to_port           = 22
-  protocol          = "tcp"
-  cidr_blocks       = [
-    local.mgmt_private_cidr,
-  ]
-  description       = "Allow SSH from management-private (bastion) for SSM port-forward"
-}
-
-########################################
-# AMI (for bastion/nginx) - dynamic
-########################################
-
-data "aws_ami" "amazon_linux2" {
-  most_recent = true
-  owners      = [
-    "amazon",
-  ]
-
-  filter {
-    name   = "name"
-    values = [
-      "amzn2-ami-hvm-*-x86_64-gp2",
-    ]
   }
 }
 
@@ -688,14 +628,12 @@ data "aws_ami" "amazon_linux2" {
 ########################################
 
 resource "aws_instance" "bastion" {
-  ami                  = data.aws_ami.amazon_linux2.id
-  instance_type        = "t3.micro"
-  subnet_id            = aws_subnet.management_private.id
-  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
-  vpc_security_group_ids = [
-    aws_security_group.management_sg.id,
-  ]
-  key_name = var.key_pair
+  ami                         = "ami-0c5204531f799e0c6"
+  instance_type               = "t3.micro"
+  subnet_id                   = aws_subnet.management_private.id
+  iam_instance_profile        = aws_iam_instance_profile.ssm_profile.name
+  vpc_security_group_ids      = [aws_security_group.management_sg.id]
+  key_name                    = var.key_pair
 
   tags = {
     Name = "Management-Bastion"
@@ -703,14 +641,16 @@ resource "aws_instance" "bastion" {
 }
 
 resource "aws_instance" "nginx" {
-  ami                  = data.aws_ami.amazon_linux2.id
-  instance_type        = "t3.micro"
-  subnet_id            = aws_subnet.app_private.id
-  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
-  vpc_security_group_ids = [
-    aws_security_group.app_sg.id,
-  ]
-  key_name = var.key_pair
+  ami                         = "ami-0c5204531f799e0c6"
+  instance_type               = "t3.micro"
+  subnet_id                   = aws_subnet.app_private.id
+  iam_instance_profile        = aws_iam_instance_profile.ssm_profile.name
+  vpc_security_group_ids      = [aws_security_group.app_sg.id]
+  key_name                    = var.key_pair
+
+  tags = {
+    Name = "App-NGINX"
+  }
 
   user_data = <<-EOF
     #!/bin/bash
@@ -719,41 +659,14 @@ resource "aws_instance" "nginx" {
     systemctl enable nginx
     systemctl start nginx
   EOF
-
-  tags = {
-    Name = "App-NGINX"
-  }
 }
 
 ########################################
 # PLACEHOLDER - PALO ALTO NVA
 ########################################
+
 # Manually deploy Palo Alto in Inspection VPC with three ENIs:
 #  - eth0 (mgmt)    -> subnet: aws_subnet.inspection_mgmt.id   + SG: aws_security_group.palo_mgmt_sg.id
 #  - eth1 (untrust) -> subnet: aws_subnet.inspection_public.id  (assign EIP)
 #  - eth2 (trust)   -> subnet: aws_subnet.inspection_private.id
 # Then steer TGW routes through the firewall for egress / East-West.
-
-########################################
-# OUTPUTS (helpers)
-########################################
-
-output "tgw_id" {
-  value       = aws_ec2_transit_gateway.tgw.id
-  description = "Transit Gateway ID"
-}
-
-output "tgw_default_route_table_id" {
-  value       = local.tgw_default_rt_id
-  description = "Default TGW route table ID used for all routes"
-}
-
-output "bastion_instance_id" {
-  value       = aws_instance.bastion.id
-  description = "SSM-enabled bastion instance ID"
-}
-
-output "palo_mgmt_sg_id" {
-  value       = aws_security_group.palo_mgmt_sg.id
-  description = "Palo Alto management SG ID"
-}
