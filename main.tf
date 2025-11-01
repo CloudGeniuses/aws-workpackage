@@ -6,7 +6,6 @@ terraform {
 
   cloud {
     organization = "AWS-CLOUDGENIUS-DEMOS"
-  # ──> Create workspace named "advantus360-acme-palo-poc" in TFC
     workspaces {
       name = "aws-workpackage"
     }
@@ -33,7 +32,7 @@ provider "aws" {
 }
 
 ############################################
-# Variables (you will fill after PAN is launched)
+# Variables (fill after PAN is launched)
 ############################################
 variable "pan_dataplane_ips" {
   description = "PAN dataplane IPs to register in the GWLB target group (trust-side dataplane IPs that terminate GENEVE)."
@@ -210,8 +209,8 @@ resource "aws_internet_gateway" "ins" {
 }
 
 resource "aws_eip" "nat_ins" {
-  vpc  = true
-  tags = { Name = "eip-nat-ins" }
+  domain = "vpc"
+  tags   = { Name = "eip-nat-ins" }
 }
 
 resource "aws_nat_gateway" "ins_mgmt" {
@@ -416,7 +415,7 @@ resource "aws_route_table_association" "ins_tgwatt_rt_assoc_az2" {
 # SSM Interface Endpoints (with dedicated SGs)
 ############################################
 resource "aws_security_group" "vpce_mgmt_sg" {
-  name        = "sg-vpce-mgmt"
+  name        = "vpce-mgmt-sg"
   description = "Allow HTTPS from Mgmt VPC to Interface Endpoints"
   vpc_id      = aws_vpc.mgmt.id
 
@@ -437,7 +436,7 @@ resource "aws_security_group" "vpce_mgmt_sg" {
 }
 
 resource "aws_security_group" "vpce_app_sg" {
-  name        = "sg-vpce-app"
+  name        = "vpce-app-sg"
   description = "Allow HTTPS from App VPC to Interface Endpoints"
   vpc_id      = aws_vpc.app.id
 
@@ -540,8 +539,7 @@ resource "aws_lb_target_group" "gwlb_tg" {
   tags = { Name = "gwlb-tg-pan" }
 }
 
-# (Targets added later via var.pan_dataplane_ips)
-
+# Expose GWLB as endpoint service
 resource "aws_vpc_endpoint_service" "gwlb_svc" {
   acceptance_required        = false
   gateway_load_balancer_arns = [aws_lb.gwlb.arn]
@@ -665,11 +663,6 @@ data "aws_ssm_parameter" "al2023_ami" {
   name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64"
 }
 
-resource "aws_iam_role" "bastion_role" {
-  name               = "bastion-ssm-role"
-  assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
-}
-
 data "aws_iam_policy_document" "ec2_assume" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -678,6 +671,11 @@ data "aws_iam_policy_document" "ec2_assume" {
       identifiers = ["ec2.amazonaws.com"]
     }
   }
+}
+
+resource "aws_iam_role" "bastion_role" {
+  name               = "bastion-ssm-role"
+  assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
 }
 
 resource "aws_iam_role_policy_attachment" "bastion_ssm_core" {
@@ -691,7 +689,7 @@ resource "aws_iam_instance_profile" "bastion_profile" {
 }
 
 resource "aws_security_group" "bastion_sg" {
-  name        = "sg-bastion-ssm"
+  name        = "bastion-ssm-sg"
   description = "Bastion uses SSM only; no inbound."
   vpc_id      = aws_vpc.mgmt.id
 
@@ -724,7 +722,7 @@ resource "aws_instance" "bastion" {
 ############################################
 # Mgmt SG - allow Bastion (or Mgmt VPC) to reach PAN mgmt (HTTPS/SSH)
 resource "aws_security_group" "pan_mgmt_sg" {
-  name        = "sg-pan-mgmt"
+  name        = "pan-mgmt-sg"
   description = "Allow Bastion/Mgmt VPC to reach PAN mgmt (443/22)."
   vpc_id      = aws_vpc.inspection.id
 
@@ -753,7 +751,7 @@ resource "aws_security_group" "pan_mgmt_sg" {
 
 # Dataplane SG - allow GENEVE + health-check from GWLBe subnets
 resource "aws_security_group" "pan_dataplane_sg" {
-  name        = "sg-pan-dataplane"
+  name        = "pan-dataplane-sg"
   description = "Allow UDP 6081 (GENEVE) + TCP 443 (HC) from TGW-attach (GWLBe) subnets."
   vpc_id      = aws_vpc.inspection.id
 
@@ -782,7 +780,7 @@ resource "aws_security_group" "pan_dataplane_sg" {
 
 # Untrust SG - allow Internet ingress to PAN Untrust (NLB preserves client IP)
 resource "aws_security_group" "pan_untrust_sg" {
-  name        = "sg-pan-untrust"
+  name        = "pan-untrust-sg"
   description = "Allow ingress 80/443/22 from Internet (tighten with CIDRs as needed)."
   vpc_id      = aws_vpc.inspection.id
 
