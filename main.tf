@@ -2,7 +2,7 @@
 # Terraform Cloud + Provider (us-west-2)
 ############################################
 terraform {
-  required_version = ">= 1.6.0, < 2.0.0"
+  required_version = ">= 1.9.0, < 2.0.0"
 
   cloud {
     organization = "AWS-CLOUDGENIUS-DEMOS"
@@ -237,15 +237,17 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "att_inspection" {
   subnet_ids             = [aws_subnet.ins_tgwatt_az1.id, aws_subnet.ins_tgwatt_az2.id]
   transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
   vpc_id                 = aws_vpc.inspection.id
-  appliance_mode_support = "enable"   # REQUIRED
+  appliance_mode_support = "enable"
   tags                   = { Name = "tgw-attach-inspection" }
 }
+
 resource "aws_ec2_transit_gateway_vpc_attachment" "att_mgmt" {
   subnet_ids         = [aws_subnet.mgmt_az1.id, aws_subnet.mgmt_az2.id]
   transit_gateway_id = aws_ec2_transit_gateway.tgw.id
   vpc_id             = aws_vpc.mgmt.id
   tags               = { Name = "tgw-attach-mgmt" }
 }
+
 resource "aws_ec2_transit_gateway_vpc_attachment" "att_app" {
   subnet_ids         = [aws_subnet.app_az1.id, aws_subnet.app_az2.id]
   transit_gateway_id = aws_ec2_transit_gateway.tgw.id
@@ -258,6 +260,7 @@ resource "aws_ec2_transit_gateway_route_table" "rt_spokes" {
   transit_gateway_id = aws_ec2_transit_gateway.tgw.id
   tags               = { Name = "tgw-rt-spokes" }
 }
+
 resource "aws_ec2_transit_gateway_route_table" "rt_inspection" {
   transit_gateway_id = aws_ec2_transit_gateway.tgw.id
   tags               = { Name = "tgw-rt-inspection" }
@@ -268,10 +271,12 @@ resource "aws_ec2_transit_gateway_route_table_association" "assoc_mgmt" {
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_mgmt.id
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.rt_spokes.id
 }
+
 resource "aws_ec2_transit_gateway_route_table_association" "assoc_app" {
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_app.id
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.rt_spokes.id
 }
+
 resource "aws_ec2_transit_gateway_route_table_association" "assoc_inspection" {
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_inspection.id
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.rt_inspection.id
@@ -282,10 +287,12 @@ resource "aws_ec2_transit_gateway_route_table_propagation" "prop_mgmt_to_spokes"
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_mgmt.id
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.rt_spokes.id
 }
+
 resource "aws_ec2_transit_gateway_route_table_propagation" "prop_app_to_spokes" {
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_app.id
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.rt_spokes.id
 }
+
 resource "aws_ec2_transit_gateway_route_table_propagation" "prop_inspection_to_inspection" {
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_inspection.id
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.rt_inspection.id
@@ -297,16 +304,19 @@ resource "aws_ec2_transit_gateway_route" "rt_spokes_default_to_inspection" {
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_inspection.id
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.rt_spokes.id
 }
+
 resource "aws_ec2_transit_gateway_route" "rt_spokes_ins_to_inspection" {
   destination_cidr_block         = aws_vpc.inspection.cidr_block
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_inspection.id
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.rt_spokes.id
 }
+
 resource "aws_ec2_transit_gateway_route" "rt_inspection_to_mgmt" {
   destination_cidr_block         = aws_vpc.mgmt.cidr_block
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_mgmt.id
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.rt_inspection.id
 }
+
 resource "aws_ec2_transit_gateway_route" "rt_inspection_to_app" {
   destination_cidr_block         = aws_vpc.app.cidr_block
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.att_app.id
@@ -321,24 +331,29 @@ resource "aws_route_table" "ins_mgmt" {
   vpc_id = aws_vpc.inspection.id
   tags   = { Name = "rt-ins-mgmt" }
 }
+
 resource "aws_route_table_association" "ins_mgmt_a1" {
   route_table_id = aws_route_table.ins_mgmt.id
   subnet_id      = aws_subnet.ins_mgmt_az1.id
 }
+
 resource "aws_route_table_association" "ins_mgmt_a2" {
   route_table_id = aws_route_table.ins_mgmt.id
   subnet_id      = aws_subnet.ins_mgmt_az2.id
 }
+
 resource "aws_route" "ins_mgmt_to_tgw_mgmt" {
   route_table_id         = aws_route_table.ins_mgmt.id
   destination_cidr_block = aws_vpc.mgmt.cidr_block
   transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
 }
+
 resource "aws_route" "ins_mgmt_to_tgw_app" {
   route_table_id         = aws_route_table.ins_mgmt.id
   destination_cidr_block = aws_vpc.app.cidr_block
   transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
 }
+
 resource "aws_route" "ins_mgmt_default_nat" {
   route_table_id         = aws_route_table.ins_mgmt.id
   destination_cidr_block = "0.0.0.0/0"
@@ -350,14 +365,17 @@ resource "aws_route_table" "ins_untrust" {
   vpc_id = aws_vpc.inspection.id
   tags   = { Name = "rt-ins-untrust" }
 }
+
 resource "aws_route_table_association" "ins_untrust_a1" {
   route_table_id = aws_route_table.ins_untrust.id
   subnet_id      = aws_subnet.ins_untrust_az1.id
 }
+
 resource "aws_route_table_association" "ins_untrust_a2" {
   route_table_id = aws_route_table.ins_untrust.id
   subnet_id      = aws_subnet.ins_untrust_az2.id
 }
+
 resource "aws_route" "ins_untrust_default_igw" {
   route_table_id         = aws_route_table.ins_untrust.id
   destination_cidr_block = "0.0.0.0/0"
@@ -369,24 +387,29 @@ resource "aws_route_table" "ins_trust" {
   vpc_id = aws_vpc.inspection.id
   tags   = { Name = "rt-ins-trust" }
 }
+
 resource "aws_route_table_association" "ins_trust_a1" {
   route_table_id = aws_route_table.ins_trust.id
   subnet_id      = aws_subnet.ins_trust_az1.id
 }
+
 resource "aws_route_table_association" "ins_trust_a2" {
   route_table_id = aws_route_table.ins_trust.id
   subnet_id      = aws_subnet.ins_trust_az2.id
 }
+
 resource "aws_route" "ins_trust_to_tgw_mgmt" {
   route_table_id         = aws_route_table.ins_trust.id
   destination_cidr_block = aws_vpc.mgmt.cidr_block
   transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
 }
+
 resource "aws_route" "ins_trust_to_tgw_app" {
   route_table_id         = aws_route_table.ins_trust.id
   destination_cidr_block = aws_vpc.app.cidr_block
   transit_gateway_id     = aws_ec2_transit_gateway.tgw.id
 }
+
 resource "aws_route" "ins_trust_default_tgw" {
   route_table_id         = aws_route_table.ins_trust.id
   destination_cidr_block = "0.0.0.0/0"
@@ -398,14 +421,17 @@ resource "aws_route_table" "ins_tgwatt_az1_rt" {
   vpc_id = aws_vpc.inspection.id
   tags   = { Name = "rt-ins-tgwattach-az1" }
 }
+
 resource "aws_route_table" "ins_tgwatt_az2_rt" {
   vpc_id = aws_vpc.inspection.id
   tags   = { Name = "rt-ins-tgwattach-az2" }
 }
+
 resource "aws_route_table_association" "ins_tgwatt_rt_assoc_az1" {
   route_table_id = aws_route_table.ins_tgwatt_az1_rt.id
   subnet_id      = aws_subnet.ins_tgwatt_az1.id
 }
+
 resource "aws_route_table_association" "ins_tgwatt_rt_assoc_az2" {
   route_table_id = aws_route_table.ins_tgwatt_az2_rt.id
   subnet_id      = aws_subnet.ins_tgwatt_az2.id
@@ -426,12 +452,14 @@ resource "aws_security_group" "vpce_mgmt_sg" {
     protocol    = "tcp"
     cidr_blocks = [aws_vpc.mgmt.cidr_block]
   }
+
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
   tags = { Name = "sg-vpce-mgmt" }
 }
 
@@ -447,12 +475,14 @@ resource "aws_security_group" "vpce_app_sg" {
     protocol    = "tcp"
     cidr_blocks = [aws_vpc.app.cidr_block]
   }
+
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
   tags = { Name = "sg-vpce-app" }
 }
 
@@ -466,6 +496,7 @@ resource "aws_vpc_endpoint" "mgmt_ssm" {
   security_group_ids  = [aws_security_group.vpce_mgmt_sg.id]
   tags = { Name = "vpce-mgmt-ssm" }
 }
+
 resource "aws_vpc_endpoint" "mgmt_ec2msg" {
   vpc_id              = aws_vpc.mgmt.id
   service_name        = "com.amazonaws.us-west-2.ec2messages"
@@ -475,6 +506,7 @@ resource "aws_vpc_endpoint" "mgmt_ec2msg" {
   security_group_ids  = [aws_security_group.vpce_mgmt_sg.id]
   tags = { Name = "vpce-mgmt-ec2messages" }
 }
+
 resource "aws_vpc_endpoint" "mgmt_ssmmsg" {
   vpc_id              = aws_vpc.mgmt.id
   service_name        = "com.amazonaws.us-west-2.ssmmessages"
@@ -495,6 +527,7 @@ resource "aws_vpc_endpoint" "app_ssm" {
   security_group_ids  = [aws_security_group.vpce_app_sg.id]
   tags = { Name = "vpce-app-ssm" }
 }
+
 resource "aws_vpc_endpoint" "app_ec2msg" {
   vpc_id              = aws_vpc.app.id
   service_name        = "com.amazonaws.us-west-2.ec2messages"
@@ -504,6 +537,7 @@ resource "aws_vpc_endpoint" "app_ec2msg" {
   security_group_ids  = [aws_security_group.vpce_app_sg.id]
   tags = { Name = "vpce-app-ec2messages" }
 }
+
 resource "aws_vpc_endpoint" "app_ssmmsg" {
   vpc_id              = aws_vpc.app.id
   service_name        = "com.amazonaws.us-west-2.ssmmessages"
@@ -529,24 +563,22 @@ resource "aws_lb_target_group" "gwlb_tg" {
   port        = 6081
   protocol    = "GENEVE"
   vpc_id      = aws_vpc.inspection.id
-  target_type = "ip"       # REQUIRED for GWLB
+  target_type = "ip"
 
   health_check {
-    port     = "443"       # PAN dataplane health-check port
+    port     = "443"
     protocol = "TCP"
   }
 
   tags = { Name = "gwlb-tg-pan" }
 }
 
-# Expose GWLB as endpoint service
 resource "aws_vpc_endpoint_service" "gwlb_svc" {
   acceptance_required        = false
   gateway_load_balancer_arns = [aws_lb.gwlb.arn]
   tags = { Name = "gwlb-endpoint-service" }
 }
 
-# GWLBe per AZ (hosted in the TGW-attach subnets)
 resource "aws_vpc_endpoint" "gwlbe_az1" {
   vpc_id            = aws_vpc.inspection.id
   vpc_endpoint_type = "GatewayLoadBalancer"
@@ -554,6 +586,7 @@ resource "aws_vpc_endpoint" "gwlbe_az1" {
   subnet_ids        = [aws_subnet.ins_tgwatt_az1.id]
   tags              = { Name = "gwlbe-ins-az1" }
 }
+
 resource "aws_vpc_endpoint" "gwlbe_az2" {
   vpc_id            = aws_vpc.inspection.id
   vpc_endpoint_type = "GatewayLoadBalancer"
@@ -568,26 +601,31 @@ resource "aws_route" "ins_tgwatt_az1_rt_default_to_gwlbe" {
   destination_cidr_block = "0.0.0.0/0"
   vpc_endpoint_id        = aws_vpc_endpoint.gwlbe_az1.id
 }
+
 resource "aws_route" "ins_tgwatt_az1_rt_mgmt_to_gwlbe" {
   route_table_id         = aws_route_table.ins_tgwatt_az1_rt.id
   destination_cidr_block = aws_vpc.mgmt.cidr_block
   vpc_endpoint_id        = aws_vpc_endpoint.gwlbe_az1.id
 }
+
 resource "aws_route" "ins_tgwatt_az1_rt_app_to_gwlbe" {
   route_table_id         = aws_route_table.ins_tgwatt_az1_rt.id
   destination_cidr_block = aws_vpc.app.cidr_block
   vpc_endpoint_id        = aws_vpc_endpoint.gwlbe_az1.id
 }
+
 resource "aws_route" "ins_tgwatt_az2_rt_default_to_gwlbe" {
   route_table_id         = aws_route_table.ins_tgwatt_az2_rt.id
   destination_cidr_block = "0.0.0.0/0"
   vpc_endpoint_id        = aws_vpc_endpoint.gwlbe_az2.id
 }
+
 resource "aws_route" "ins_tgwatt_az2_rt_mgmt_to_gwlbe" {
   route_table_id         = aws_route_table.ins_tgwatt_az2_rt.id
   destination_cidr_block = aws_vpc.mgmt.cidr_block
   vpc_endpoint_id        = aws_vpc_endpoint.gwlbe_az2.id
 }
+
 resource "aws_route" "ins_tgwatt_az2_rt_app_to_gwlbe" {
   route_table_id         = aws_route_table.ins_tgwatt_az2_rt.id
   destination_cidr_block = aws_vpc.app.cidr_block
@@ -613,6 +651,7 @@ resource "aws_lb_target_group" "nlb_tg_tcp80" {
   vpc_id      = aws_vpc.inspection.id
   target_type = "ip"
 }
+
 resource "aws_lb_target_group" "nlb_tg_tcp443" {
   name        = "nlb-tg-443"
   port        = 443
@@ -620,6 +659,7 @@ resource "aws_lb_target_group" "nlb_tg_tcp443" {
   vpc_id      = aws_vpc.inspection.id
   target_type = "ip"
 }
+
 resource "aws_lb_target_group" "nlb_tg_tcp22" {
   name        = "nlb-tg-22"
   port        = 22
@@ -637,6 +677,7 @@ resource "aws_lb_listener" "nlb_listener_80" {
     target_group_arn = aws_lb_target_group.nlb_tg_tcp80.arn
   }
 }
+
 resource "aws_lb_listener" "nlb_listener_443" {
   load_balancer_arn = aws_lb.nlb_edge.arn
   port              = 443
@@ -646,6 +687,7 @@ resource "aws_lb_listener" "nlb_listener_443" {
     target_group_arn = aws_lb_target_group.nlb_tg_tcp443.arn
   }
 }
+
 resource "aws_lb_listener" "nlb_listener_22" {
   load_balancer_arn = aws_lb.nlb_edge.arn
   port              = 22
@@ -657,7 +699,7 @@ resource "aws_lb_listener" "nlb_listener_22" {
 }
 
 ############################################
-# Bastion Host (Mgmt VPC) - SSM only (no SSH keys)
+# Bastion Host (Mgmt VPC) - SSM only
 ############################################
 data "aws_ssm_parameter" "al2023_ami" {
   name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64"
@@ -693,7 +735,6 @@ resource "aws_security_group" "bastion_sg" {
   description = "Bastion uses SSM only; no inbound."
   vpc_id      = aws_vpc.mgmt.id
 
-  # No ingress (SSM uses VPC endpoints)
   egress {
     from_port   = 0
     to_port     = 0
@@ -710,17 +751,18 @@ resource "aws_instance" "bastion" {
   subnet_id              = aws_subnet.mgmt_az1.id
   iam_instance_profile   = aws_iam_instance_profile.bastion_profile.name
   vpc_security_group_ids = [aws_security_group.bastion_sg.id]
+
   metadata_options {
     http_endpoint = "enabled"
     http_tokens   = "required"
   }
+
   tags = { Name = "bastion-ssm" }
 }
 
 ############################################
 # PAN Security Groups (attach to PAN ENIs at launch)
 ############################################
-# Mgmt SG - allow Bastion (or Mgmt VPC) to reach PAN mgmt (HTTPS/SSH)
 resource "aws_security_group" "pan_mgmt_sg" {
   name        = "pan-mgmt-sg"
   description = "Allow Bastion/Mgmt VPC to reach PAN mgmt (443/22)."
@@ -733,6 +775,7 @@ resource "aws_security_group" "pan_mgmt_sg" {
     protocol    = "tcp"
     cidr_blocks = [aws_vpc.mgmt.cidr_block]
   }
+
   ingress {
     description = "SSH from Mgmt VPC (optional)"
     from_port   = 22
@@ -740,16 +783,17 @@ resource "aws_security_group" "pan_mgmt_sg" {
     protocol    = "tcp"
     cidr_blocks = [aws_vpc.mgmt.cidr_block]
   }
+
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
   tags = { Name = "sg-pan-mgmt" }
 }
 
-# Dataplane SG - allow GENEVE + health-check from GWLBe subnets
 resource "aws_security_group" "pan_dataplane_sg" {
   name        = "pan-dataplane-sg"
   description = "Allow UDP 6081 (GENEVE) + TCP 443 (HC) from TGW-attach (GWLBe) subnets."
@@ -762,6 +806,7 @@ resource "aws_security_group" "pan_dataplane_sg" {
     protocol    = "udp"
     cidr_blocks = [local.cidr.ins_tgwatt_az1, local.cidr.ins_tgwatt_az2]
   }
+
   ingress {
     description = "Health check TCP/443 from GWLBe (AZ1/AZ2)"
     from_port   = 443
@@ -769,16 +814,17 @@ resource "aws_security_group" "pan_dataplane_sg" {
     protocol    = "tcp"
     cidr_blocks = [local.cidr.ins_tgwatt_az1, local.cidr.ins_tgwatt_az2]
   }
+
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
   tags = { Name = "sg-pan-dataplane" }
 }
 
-# Untrust SG - allow Internet ingress to PAN Untrust (NLB preserves client IP)
 resource "aws_security_group" "pan_untrust_sg" {
   name        = "pan-untrust-sg"
   description = "Allow ingress 80/443/22 from Internet (tighten with CIDRs as needed)."
@@ -791,6 +837,7 @@ resource "aws_security_group" "pan_untrust_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
   ingress {
     description = "HTTPS"
     from_port   = 443
@@ -798,6 +845,7 @@ resource "aws_security_group" "pan_untrust_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
   ingress {
     description = "SSH demo (restrict to allowlist in production)"
     from_port   = 22
@@ -805,19 +853,20 @@ resource "aws_security_group" "pan_untrust_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
   tags = { Name = "sg-pan-untrust" }
 }
 
 ############################################
 # Register PAN IPs (after launch) to GWLB & NLB
 ############################################
-# GWLB target attachments (dataplane IPs)
 resource "aws_lb_target_group_attachment" "gwlb_pan_targets" {
   for_each         = toset(var.pan_dataplane_ips)
   target_group_arn = aws_lb_target_group.gwlb_tg.arn
@@ -825,19 +874,20 @@ resource "aws_lb_target_group_attachment" "gwlb_pan_targets" {
   port             = 6081
 }
 
-# NLB target attachments (Untrust IPs) - for ingress demo
 resource "aws_lb_target_group_attachment" "nlb_pan_80" {
   for_each         = toset(var.pan_untrust_ips)
   target_group_arn = aws_lb_target_group.nlb_tg_tcp80.arn
   target_id        = each.value
   port             = 80
 }
+
 resource "aws_lb_target_group_attachment" "nlb_pan_443" {
   for_each         = toset(var.pan_untrust_ips)
   target_group_arn = aws_lb_target_group.nlb_tg_tcp443.arn
   target_id        = each.value
   port             = 443
 }
+
 resource "aws_lb_target_group_attachment" "nlb_pan_22" {
   for_each         = toset(var.pan_untrust_ips)
   target_group_arn = aws_lb_target_group.nlb_tg_tcp22.arn
