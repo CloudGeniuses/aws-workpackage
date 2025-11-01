@@ -5,10 +5,10 @@ terraform {
   required_version = ">= 1.6.0, < 2.0.0"
 
   cloud {
-    organization = "YOUR_TFC_ORG"
+    organization = "AWS-CLOUDGENIUS-DEMOS"
   # ──> Create workspace named "advantus360-acme-palo-poc" in TFC
     workspaces {
-      name = "advantus360-acme-palo-poc"
+      name = "aws-workpackage"
     }
   }
 
